@@ -1,0 +1,151 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Af© ACCOUNTS - Invoicing & Business Accounting</title>
+    <link rel="icon" type="image/svg+xml" href="/logo.svg">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Inter', 'Tajawal', 'system-ui', 'sans-serif'],
+              arabic: ['Tajawal', 'Cairo', 'sans-serif'],
+            },
+            colors: {
+              darkbg: '#0b0f19',
+              darkcard: '#131b2e',
+              darkborder: '#1f293d',
+            }
+          }
+        }
+      }
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&family=Inter:wght@300;400;500;600;700;800;900&family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', 'Tajawal', sans-serif;
+            background-color: #f8fafc;
+            color: #0f172a;
+        }
+        html.dark body {
+            background-color: #0b0f19;
+            color: #f8fafc;
+        }
+        .aed-2026 {
+            font-weight: 900;
+            color: #4f46e5;
+            margin-right: 4px;
+        }
+        [dir="rtl"] {
+            font-family: 'Tajawal', 'Cairo', sans-serif;
+        }
+        /* Custom scrollbar for dark & light */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 9999px;
+        }
+        html.dark .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #334155;
+        }
+        /* Black Date Background Styling */
+        .date-badge-black {
+            background-color: #000000 !important;
+            color: #ffffff !important;
+            padding: 6px 14px;
+            border-radius: 10px;
+            font-weight: 800;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            letter-spacing: 0.5px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+        /* Print Styles for Professional PDF */
+        @media print {
+            @page {
+                size: A4;
+                margin: 10mm;
+            }
+            html, body, #root {
+                background: white !important;
+                color: black !important;
+                height: auto !important;
+                min-height: auto !important;
+                overflow: visible !important;
+                position: static !important;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+            }
+            aside, header, nav, .no-print, button:not(.print-keep), .ai-helper-sidebar, .save-indicator {
+                display: none !important;
+            }
+            main, .custom-scrollbar, div[class*="overflow-"] {
+                padding: 0 !important;
+                margin: 0 !important;
+                overflow: visible !important;
+                height: auto !important;
+                max-height: none !important;
+                position: static !important;
+            }
+            .print-container {
+                position: relative !important;
+                top: auto !important;
+                left: auto !important;
+                width: 100% !important;
+                max-width: 100% !important;
+                min-height: auto !important;
+                padding: 20px !important;
+                border: none !important;
+                box-shadow: none !important;
+                border-radius: 0 !important;
+                background: white !important;
+            }
+            .date-badge-black {
+                background-color: #000 !important;
+                color: #fff !important;
+                box-shadow: none !important;
+            }
+            input, select, textarea {
+                border: none !important;
+                background: transparent !important;
+                padding: 0 !important;
+                color: black !important;
+                font-weight: bold !important;
+            }
+            * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+        }
+    </style>
+<script type="importmap">
+{
+  "imports": {
+    "lucide-react": "https://esm.sh/lucide-react@^0.563.0",
+    "@google/genai": "https://esm.sh/@google/genai@^1.38.0",
+    "recharts": "https://esm.sh/recharts@^3.7.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react": "https://esm.sh/react@^19.2.3",
+    "react/": "https://esm.sh/react@^19.2.3/"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+<body>
+    <div id="root"></div>
+<script type="module" src="/index.tsx"></script>
+</body>
+</html>

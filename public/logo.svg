@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="100%" height="100%">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Dancing+Script:wght@700&amp;family=Alex+Brush&amp;family=Caveat:wght@700&amp;family=Great+Vibes&amp;family=Playfair+Display:ital,wght@1,900&amp;display=swap');
+      .script-af {
+        font-family: 'Great Vibes', 'Alex Brush', 'Dancing Script', cursive, sans-serif;
+        font-size: 260px;
+        font-weight: 700;
+        fill: #000000;
+      }
+      .ring-oval {
+        fill: none;
+        stroke: #000000;
+        stroke-width: 20;
+      }
+      .c-inner {
+        font-family: 'Playfair Display', serif, sans-serif;
+        font-style: italic;
+        font-weight: 900;
+        font-size: 110px;
+        fill: #000000;
+      }
+    </style>
+  </defs>
+
+  <!-- Clean squircle app container background -->
+  <rect width="500" height="500" rx="110" fill="#ffffff"/>
+  <rect width="496" height="496" x="2" y="2" rx="108" fill="none" stroke="#f1f5f9" stroke-width="3"/>
+
+  <!-- Af Signature Script and (C) Symbol -->
+  <g transform="translate(15, 20)">
+    <!-- Script 'Af' Path matching handwritten cursive master stroke -->
+    <path d="M 95 285 C 80 285 70 270 70 250 C 70 215 98 185 140 185 C 160 185 178 198 190 220 C 198 190 222 170 250 170 C 275 170 295 185 305 205 C 315 180 340 160 375 160 C 400 160 415 175 405 205 L 365 315 C 355 345 330 380 300 380 C 270 380 255 355 265 325 L 285 270 C 270 270 250 280 240 300 L 210 375 C 195 410 170 435 140 435 C 115 435 100 415 110 385 L 145 285 C 125 285 108 285 95 285 Z" fill="#000000" style="display:none;"/>
+
+    <!-- Direct Vector Representation with Smooth High Precision Geometry -->
+    <!-- 'A' cursive loop & stem -->
+    <path d="M 85 270 C 80 240 110 215 145 215 C 172 215 188 232 188 255 C 188 285 158 310 120 310 C 95 310 85 290 85 270 Z M 165 240 C 145 240 125 255 125 270 C 125 280 135 288 148 288 C 165 288 178 272 178 255 C 178 245 172 240 165 240 Z" fill="#000000"/>
+    
+    <!-- Bold Swash A to f -->
+    <path d="M 130 308 C 175 308 215 250 245 185 C 260 152 278 145 295 145 C 315 145 325 160 310 200 L 265 315 C 240 380 210 440 175 440 C 152 440 142 420 152 390 L 195 280 C 180 295 155 308 130 308 Z" fill="#000000"/>
+
+    <!-- Flourish 'f' cross and connection -->
+    <path d="M 235 270 C 275 250 315 248 355 252 C 345 272 320 282 290 282 C 265 282 248 278 235 270 Z" fill="#000000"/>
+    
+    <!-- Pure Visual Calligraphic Rendering with Exact Silhouette -->
+    <!-- Af Calligraphy Group -->
+    <g id="af-glyph">
+      <!-- High-fidelity custom bezier calligraphy rendering -->
+      <!-- A Stem & Loop -->
+      <path d="M 70,270 C 65,235 105,195 155,195 C 185,195 205,215 202,248 C 200,285 160,325 110,325 C 80,325 72,300 70,270 Z M 148,225 C 125,225 105,245 105,270 C 105,288 118,298 135,298 C 158,298 175,275 175,252 C 175,235 165,225 148,225 Z" fill="#000000"/>
+      <!-- Fluid Swash connecting A to f and descending loop -->
+      <path d="M 140,320 C 180,320 220,265 248,205 C 265,168 285,150 308,150 C 328,150 338,168 322,205 L 280,305 C 255,365 228,435 192,435 C 168,435 158,415 168,385 L 208,285 C 188,302 165,320 140,320 Z" fill="#000000"/>
+      <!-- Cross stroke & bridge -->
+      <path d="M 230,275 C 265,258 310,254 348,258 C 338,276 308,286 278,286 C 255,286 242,282 230,275 Z" fill="#000000"/>
+    </g>
+
+    <!-- Tilted Oval Ring (C) -->
+    <g transform="translate(345, 235) rotate(18)">
+      <!-- Oval Ring -->
+      <ellipse cx="0" cy="0" rx="72" ry="94" fill="none" stroke="#000000" stroke-width="24"/>
+      <!-- Letter C inside -->
+      <path d="M 28,-38 C 18,-52 -2,-56 -20,-48 C -42,-38 -52,-12 -48,18 C -44,48 -22,62 5,56 C 24,52 35,38 38,24 C 36,22 30,25 24,28 C 6,36 -12,28 -18,2 C -24,-24 -12,-40 8,-40 C 18,-40 25,-32 28,-38 Z" fill="#000000"/>
+    </g>
+  </g>
+</svg>

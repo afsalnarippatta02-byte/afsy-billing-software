@@ -1,0 +1,8 @@
+{
+  "name": "AFSY BILLING SOFTWARE",
+  "description": "A comprehensive billing and project management solution tailored for media agencies, featuring AI-powered invoice generation and financial insights.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
