@@ -73,7 +73,11 @@ export const formatMoneyCompact = (amount: number | undefined | null, currencyCo
  */
 export const isInvoiceOverdue = (invoice: Invoice): boolean => {
   if (!invoice) return false;
-  if (invoice.status === InvoiceStatus.PAID || invoice.status === InvoiceStatus.QUOTATION) {
+  if (
+    invoice.status === InvoiceStatus.PAID ||
+    invoice.status === InvoiceStatus.QUOTATION ||
+    invoice.status === InvoiceStatus.PROFORMA
+  ) {
     return false;
   }
   if (invoice.status === InvoiceStatus.OVERDUE) {

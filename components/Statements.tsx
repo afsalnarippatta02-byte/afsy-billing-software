@@ -1,67 +1,136 @@
 import React, { useState, useMemo } from 'react';
-import { 
-  Invoice, 
-  Client, 
-  InvoiceStatus, 
+import {
+  Invoice,
+  Client,
+  InvoiceStatus,
   CompanySettings,
-  PaymentMethod 
+  PaymentMethod,
+  Expense
 } from '../types';
-import { 
-  FileText, 
-  Download, 
-  Printer, 
-  Search, 
-  Calendar, 
-  CheckCircle2, 
-  AlertCircle, 
-  Clock, 
-  ExternalLink, 
-  Building2, 
-  Mail, 
-  Phone, 
-  MapPin, 
-  FileSpreadsheet, 
-  ShieldCheck, 
-  ArrowUpRight, 
-  Filter, 
+import {
+  FileText,
+  Download,
+  Printer,
+  Search,
+  Calendar,
+  CheckCircle2,
+  AlertCircle,
+  Clock,
+  ExternalLink,
+  Building2,
+  Mail,
+  Phone,
+  MapPin,
+  FileSpreadsheet,
+  ShieldCheck,
+  Filter,
   X,
   CreditCard,
   Layers,
-  ChevronRight,
-  Loader2
+  Loader2,
+  SlidersHorizontal,
+  BarChart3,
+  PieChart,
+  TrendingUp,
+  TrendingDown,
+  Wallet,
+  Tag,
+  Check,
+  RotateCcw,
+  CalendarRange,
+  CalendarDays,
+  ArrowUpDown
 } from 'lucide-react';
 import { downloadElementAsPdf, printElementDirectly, downloadDocumentAsHtml } from '../utils/pdfExport';
 import { LanguageCode, getTranslation } from '../utils/translations';
+import { isInvoiceOverdue } from '../utils/currency';
 
 interface StatementsProps {
   invoices: Invoice[];
   clients: Client[];
+  expenses?: Expense[];
+  categories?: string[];
   settings?: CompanySettings;
   onSelectInvoice?: (id: string) => void;
   onUpdateInvoice?: (inv: Invoice) => void;
   language?: LanguageCode;
 }
 
-export const Statements: React.FC<StatementsProps> = ({ 
-  invoices, 
-  clients, 
-  settings, 
+type DateFilterMode = 'all' | 'month_wise' | 'date_range' | 'today' | 'last_7_days' | 'last_30_days' | 'this_quarter' | 'this_year';
+type StatusFilterMode = 'all' | 'paid' | 'unpaid' | 'overdue' | 'sent' | 'proforma' | 'draft';
+type StatementTypeMode = 'invoices' | 'expenses' | 'combined';
+type GroupingMode = 'chronological' | 'month_wise' | 'category_wise' | 'paid_unpaid_split';
+
+const MONTH_NAMES = [
+  { index: 0, short: 'Jan', full: 'January' },
+  { index: 1, short: 'Feb', full: 'February' },
+  { index: 2, short: 'Mar', full: 'March' },
+  { index: 3, short: 'Apr', full: 'April' },
+  { index: 4, short: 'May', full: 'May' },
+  { index: 5, short: 'Jun', full: 'June' },
+  { index: 6, short: 'Jul', full: 'July' },
+  { index: 7, short: 'Aug', full: 'August' },
+  { index: 8, short: 'Sep', full: 'September' },
+  { index: 9, short: 'Oct', full: 'October' },
+  { index: 10, short: 'Nov', full: 'November' },
+  { index: 11, short: 'Dec', full: 'December' }
+];
+
+export const Statements: React.FC<StatementsProps> = ({
+  invoices = [],
+  clients = [],
+  expenses = [],
+  categories = [],
+  settings,
   onSelectInvoice,
   onUpdateInvoice,
   language = 'en'
 }) => {
-  const [selectedClientId, setSelectedClientId] = useState(clients?.[0]?.id || '');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'settled' | 'unsettled'>('all');
-  const [searchInvoice, setSearchInvoice] = useState('');
+  // 1. Scope & Statement Mode
+  const [selectedClientId, setSelectedClientId] = useState<string>('ALL');
+  const [statementType, setStatementType] = useState<StatementTypeMode>('invoices');
+  const [groupingMode, setGroupingMode] = useState<GroupingMode>('chronological');
+
+  // 2. Date-Wise & Month-Wise Filter State
+  const [dateFilterMode, setDateFilterMode] = useState<DateFilterMode>('all');
+  const [selectedYear, setSelectedYear] = useState<number>(() => new Date().getFullYear());
+  const [selectedMonths, setSelectedMonths] = useState<number[]>([]); // empty = all months in selected year
+  const [customStartDate, setCustomStartDate] = useState<string>('');
+  const [customEndDate, setCustomEndDate] = useState<string>('');
+  const [sortDirection, setSortDirection] = useState<'desc' | 'asc'>('desc');
+
+  // 3. Paid / Unpaid / Payment Method Filter State
+  const [statusFilter, setStatusFilter] = useState<StatusFilterMode>('all');
+  const [paymentMethodFilter, setPaymentMethodFilter] = useState<string>('ALL');
+
+  // 4. Category-Based Filter State
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [searchQuery, setSearchQuery] = useState<string>('');
+
+  // 5. Statement Layout & Print/PDF Customization Options
+  const [showCustomizerDrawer, setShowCustomizerDrawer] = useState<boolean>(false);
+  const [customStatementTitle, setCustomStatementTitle] = useState<string>('STATEMENT OF ACCOUNT');
+  const [showMonthSummaryInPdf, setShowMonthSummaryInPdf] = useState<boolean>(true);
+  const [showCategorySummaryInPdf, setShowCategorySummaryInPdf] = useState<boolean>(true);
+  const [showLineItemDetailsInPdf, setShowLineItemDetailsInPdf] = useState<boolean>(true);
+  const [showRunningBalanceInPdf, setShowRunningBalanceInPdf] = useState<boolean>(true);
+  const [showBankDetailsInPdf, setShowBankDetailsInPdf] = useState<boolean>(true);
+  const [customFooterNote, setCustomFooterNote] = useState<string>(
+    'Please remit any outstanding balance to the designated bank account and quote your Invoice ID as reference.'
+  );
+
+  // Modals & Export State
   const [showPrintModal, setShowPrintModal] = useState(false);
   const [showCertificateModal, setShowCertificateModal] = useState(false);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [exportMsg, setExportMsg] = useState('');
 
   const t = (key: string, fallback?: string) => getTranslation(language, key, fallback);
-  const client = (clients || []).find(c => c.id === selectedClientId) || clients?.[0];
+  const selectedClient = useMemo(
+    () => (selectedClientId === 'ALL' ? null : clients.find(c => c.id === selectedClientId) || null),
+    [clients, selectedClientId]
+  );
   const currencySymbol = settings?.defaultCurrency || 'AED';
-  const AED_SYMBOL = 'د.إ';
 
   const formatDate = (dateStr: string) => {
     if (!dateStr) return '';
@@ -72,679 +141,2146 @@ export const Statements: React.FC<StatementsProps> = ({
     return dateStr;
   };
 
-  // Only count finalized invoices (exclude Quotations) for financial statements
-  const clientInvoices = useMemo(() => {
+  // Extract available years from invoices and expenses
+  const availableYears = useMemo(() => {
+    const years = new Set<number>([new Date().getFullYear()]);
+    invoices.forEach(inv => {
+      if (inv.date) {
+        const y = parseInt(inv.date.split('-')[0], 10);
+        if (!isNaN(y)) years.add(y);
+      }
+    });
+    expenses.forEach(exp => {
+      if (exp.date) {
+        const y = parseInt(exp.date.split('-')[0], 10);
+        if (!isNaN(y)) years.add(y);
+      }
+    });
+    return Array.from(years).sort((a, b) => b - a);
+  }, [invoices, expenses]);
+
+  // Extract all available service categories (from invoices) and expense categories
+  const availableServiceCategories = useMemo(() => {
+    const set = new Set<string>();
+    invoices.forEach(inv => {
+      (inv.items || []).forEach(item => {
+        if (item.category && item.category.trim()) set.add(item.category.trim());
+        if (item.service && item.service.trim()) set.add(item.service.trim());
+      });
+    });
+    return Array.from(set).sort();
+  }, [invoices]);
+
+  const availableExpenseCategories = useMemo(() => {
+    const set = new Set<string>(categories);
+    expenses.forEach(exp => {
+      if (exp.category && exp.category.trim()) set.add(exp.category.trim());
+    });
+    return Array.from(set).sort();
+  }, [categories, expenses]);
+
+  const allAvailableCategories = useMemo(() => {
+    if (statementType === 'invoices') return availableServiceCategories;
+    if (statementType === 'expenses') return availableExpenseCategories;
+    return Array.from(new Set([...availableServiceCategories, ...availableExpenseCategories])).sort();
+  }, [statementType, availableServiceCategories, availableExpenseCategories]);
+
+  // Helper calculations for an invoice (with optional category filtering)
+  const calculateInvoiceMetrics = (inv: Invoice, filterCats: string[]) => {
+    const matchingItems =
+      filterCats.length === 0
+        ? inv.items || []
+        : (inv.items || []).filter(
+            it =>
+              filterCats.includes(it.category || '') ||
+              filterCats.includes(it.service || '')
+          );
+
+    const subtotal = matchingItems.reduce((s, i) => s + (i.quantity || 0) * (i.rate || 0), 0);
+    const discount = subtotal * ((inv.discount || 0) / 100);
+    const tax = (subtotal - discount) * ((inv.taxRate || 0) / 100);
+    const total = subtotal - discount + tax;
+    const itemCategories = Array.from(
+      new Set(
+        matchingItems
+          .map(i => i.category || i.service || 'General Service')
+          .filter(Boolean)
+      )
+    );
+
+    return {
+      subtotal,
+      discount,
+      tax,
+      total,
+      matchingItems,
+      primaryCategory: itemCategories[0] || 'General Service',
+      allCategories: itemCategories
+    };
+  };
+
+  // Date matcher helper
+  const matchesDateFilter = (dateStr: string): boolean => {
+    if (!dateStr || dateFilterMode === 'all') return true;
+    const docDate = new Date(dateStr + 'T00:00:00');
+    if (isNaN(docDate.getTime())) return true;
+
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    if (dateFilterMode === 'today') {
+      return docDate.getTime() === todayStart.getTime();
+    }
+    if (dateFilterMode === 'last_7_days') {
+      const sevenDaysAgo = new Date(todayStart);
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+      return docDate >= sevenDaysAgo && docDate <= todayStart;
+    }
+    if (dateFilterMode === 'last_30_days') {
+      const thirtyDaysAgo = new Date(todayStart);
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      return docDate >= thirtyDaysAgo && docDate <= todayStart;
+    }
+    if (dateFilterMode === 'this_quarter') {
+      const currentQuarter = Math.floor(now.getMonth() / 3);
+      const qStart = new Date(now.getFullYear(), currentQuarter * 3, 1);
+      const qEnd = new Date(now.getFullYear(), currentQuarter * 3 + 3, 0, 23, 59, 59);
+      return docDate >= qStart && docDate <= qEnd;
+    }
+    if (dateFilterMode === 'this_year') {
+      return docDate.getFullYear() === now.getFullYear();
+    }
+    if (dateFilterMode === 'month_wise') {
+      if (docDate.getFullYear() !== selectedYear) return false;
+      if (selectedMonths.length === 0) return true;
+      return selectedMonths.includes(docDate.getMonth());
+    }
+    if (dateFilterMode === 'date_range') {
+      if (customStartDate) {
+        const start = new Date(customStartDate + 'T00:00:00');
+        if (docDate < start) return false;
+      }
+      if (customEndDate) {
+        const end = new Date(customEndDate + 'T23:59:59');
+        if (docDate > end) return false;
+      }
+      return true;
+    }
+    return true;
+  };
+
+  // Status matcher for invoices
+  const isEffectiveOverdue = (inv: Invoice) =>
+    inv.status === InvoiceStatus.OVERDUE || isInvoiceOverdue(inv);
+
+  const matchesInvoiceStatus = (inv: Invoice): boolean => {
+    // Exclude Quotations unless user searches for them specifically
+    if (inv.status === InvoiceStatus.QUOTATION) return false;
+
+    // Exclude Proforma unless 'proforma' filter or 'all' is selected
+    if (statusFilter === 'proforma') {
+      return inv.status === InvoiceStatus.PROFORMA;
+    }
+    if (inv.status === InvoiceStatus.PROFORMA && statusFilter !== 'all') {
+      return false;
+    }
+
+    if (statusFilter === 'paid') {
+      return inv.status === InvoiceStatus.PAID;
+    }
+    if (statusFilter === 'unpaid') {
+      return (
+        inv.status !== InvoiceStatus.PAID &&
+        inv.status !== InvoiceStatus.PROFORMA &&
+        inv.status !== InvoiceStatus.QUOTATION
+      );
+    }
+    if (statusFilter === 'overdue') {
+      return isEffectiveOverdue(inv);
+    }
+    if (statusFilter === 'sent') {
+      return inv.status === InvoiceStatus.SENT && !isEffectiveOverdue(inv);
+    }
+    if (statusFilter === 'draft') {
+      return inv.status === InvoiceStatus.DRAFT;
+    }
+    return true;
+  };
+
+  // Filtered Invoices
+  const filteredInvoices = useMemo(() => {
+    if (statementType === 'expenses') return [];
+
     return invoices
-      .filter(inv => inv.clientId === selectedClientId && inv.status !== InvoiceStatus.QUOTATION)
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [invoices, selectedClientId]);
+      .filter(inv => {
+        if (selectedClientId !== 'ALL' && inv.clientId !== selectedClientId) return false;
+        if (!matchesInvoiceStatus(inv)) return false;
+        if (!matchesDateFilter(inv.date)) return false;
 
-  const calculateInvoiceTotal = (inv: Invoice) => {
-    const subtotal = inv.items.reduce((s, i) => s + (i.quantity * i.rate), 0);
-    const discount = subtotal * (inv.discount / 100);
-    const tax = (subtotal - discount) * (inv.taxRate / 100);
-    return subtotal - discount + tax;
-  };
+        if (paymentMethodFilter !== 'ALL') {
+          if ((inv.paymentMethod || '') !== paymentMethodFilter) return false;
+        }
 
-  const calculateInvoiceSubtotal = (inv: Invoice) => {
-    return inv.items.reduce((s, i) => s + (i.quantity * i.rate), 0);
-  };
+        // Category filter
+        if (selectedCategories.length > 0) {
+          const hasMatchingCategory = (inv.items || []).some(
+            it =>
+              selectedCategories.includes(it.category || '') ||
+              selectedCategories.includes(it.service || '')
+          );
+          if (!hasMatchingCategory) return false;
+        }
 
-  const calculateInvoiceTax = (inv: Invoice) => {
-    const subtotal = calculateInvoiceSubtotal(inv);
-    const discount = subtotal * (inv.discount / 100);
-    return (subtotal - discount) * (inv.taxRate / 100);
-  };
+        // Search filter
+        if (searchQuery.trim()) {
+          const q = searchQuery.toLowerCase();
+          const clientObj = clients.find(c => c.id === inv.clientId);
+          const clientName = `${clientObj?.company || ''} ${clientObj?.name || ''}`.toLowerCase();
+          const idMatch = inv.id.toLowerCase().includes(q);
+          const itemMatch = (inv.items || []).some(
+            i =>
+              (i.description || '').toLowerCase().includes(q) ||
+              (i.service || '').toLowerCase().includes(q) ||
+              (i.category || '').toLowerCase().includes(q)
+          );
+          if (!idMatch && !itemMatch && !clientName.includes(q)) return false;
+        }
 
+        return true;
+      })
+      .sort((a, b) => {
+        const diff = new Date(b.date).getTime() - new Date(a.date).getTime();
+        return sortDirection === 'desc' ? diff : -diff;
+      });
+  }, [
+    invoices,
+    statementType,
+    selectedClientId,
+    statusFilter,
+    dateFilterMode,
+    selectedYear,
+    selectedMonths,
+    customStartDate,
+    customEndDate,
+    paymentMethodFilter,
+    selectedCategories,
+    searchQuery,
+    sortDirection,
+    clients
+  ]);
+
+  // Filtered Expenses
+  const filteredExpenses = useMemo(() => {
+    if (statementType === 'invoices') return [];
+
+    return expenses
+      .filter(exp => {
+        if (selectedClientId !== 'ALL' && exp.clientId && exp.clientId !== selectedClientId) {
+          return false;
+        }
+        if (selectedClientId !== 'ALL' && !exp.clientId) {
+          return false;
+        }
+        if (!matchesDateFilter(exp.date)) return false;
+
+        if (paymentMethodFilter !== 'ALL') {
+          if ((exp.paymentMethod || '') !== paymentMethodFilter) return false;
+        }
+
+        if (selectedCategories.length > 0) {
+          if (!selectedCategories.includes(exp.category || '')) return false;
+        }
+
+        if (searchQuery.trim()) {
+          const q = searchQuery.toLowerCase();
+          const match =
+            (exp.description || '').toLowerCase().includes(q) ||
+            (exp.category || '').toLowerCase().includes(q) ||
+            (exp.vendor || '').toLowerCase().includes(q) ||
+            (exp.receiptNumber || '').toLowerCase().includes(q);
+          if (!match) return false;
+        }
+
+        return true;
+      })
+      .sort((a, b) => {
+        const diff = new Date(b.date).getTime() - new Date(a.date).getTime();
+        return sortDirection === 'desc' ? diff : -diff;
+      });
+  }, [
+    expenses,
+    statementType,
+    selectedClientId,
+    dateFilterMode,
+    selectedYear,
+    selectedMonths,
+    customStartDate,
+    customEndDate,
+    paymentMethodFilter,
+    selectedCategories,
+    searchQuery,
+    sortDirection
+  ]);
+
+  // Aggregate KPI Statistics
   const stats = useMemo(() => {
     let totalInvoiced = 0;
     let totalPaid = 0;
-    let totalVat = 0;
+    let totalUnpaid = 0;
+    let totalOverdue = 0;
+    let totalProforma = 0;
+    let totalTax = 0;
     let paidCount = 0;
-    let pendingCount = 0;
+    let unpaidCount = 0;
+    let overdueCount = 0;
+    let proformaCount = 0;
 
-    clientInvoices.forEach(inv => {
-      const total = calculateInvoiceTotal(inv);
-      const vat = calculateInvoiceTax(inv);
-      totalInvoiced += total;
-      totalVat += vat;
+    filteredInvoices.forEach(inv => {
+      const m = calculateInvoiceMetrics(inv, selectedCategories);
+      if (inv.status === InvoiceStatus.PROFORMA) {
+        totalProforma += m.total;
+        proformaCount++;
+        return;
+      }
+
+      totalInvoiced += m.total;
+      totalTax += m.tax;
 
       if (inv.status === InvoiceStatus.PAID) {
-        totalPaid += total;
+        totalPaid += m.total;
         paidCount++;
       } else {
-        pendingCount++;
+        totalUnpaid += m.total;
+        unpaidCount++;
+        if (isEffectiveOverdue(inv)) {
+          totalOverdue += m.total;
+          overdueCount++;
+        }
       }
     });
 
-    const balance = totalInvoiced - totalPaid;
-    const settlementRate = totalInvoiced > 0 ? ((totalPaid / totalInvoiced) * 100).toFixed(0) : '100';
+    const totalExpenses = filteredExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+    const netCashflow = totalPaid - totalExpenses;
 
-    return { 
-      totalInvoiced, 
-      totalPaid, 
-      totalVat, 
-      balance, 
-      settlementRate,
+    return {
+      totalInvoiced,
+      totalPaid,
+      totalUnpaid,
+      totalOverdue,
+      totalProforma,
+      totalTax,
       paidCount,
-      pendingCount,
-      totalCount: clientInvoices.length
+      unpaidCount,
+      overdueCount,
+      proformaCount,
+      totalExpenses,
+      expenseCount: filteredExpenses.length,
+      netCashflow,
+      isFullySettled: filteredInvoices.length > 0 && totalUnpaid === 0
     };
-  }, [clientInvoices]);
+  }, [filteredInvoices, filteredExpenses, selectedCategories]);
 
-  // Filtered list for display
-  const displayedInvoices = useMemo(() => {
-    return clientInvoices
-      .filter(inv => {
-        if (statusFilter === 'settled') return inv.status === InvoiceStatus.PAID;
-        if (statusFilter === 'unsettled') return inv.status !== InvoiceStatus.PAID;
-        return true;
-      })
-      .filter(inv => {
-        if (!searchInvoice) return true;
-        const query = searchInvoice.toLowerCase();
-        return inv.id.toLowerCase().includes(query) || 
-          inv.items.some(it => it.description.toLowerCase().includes(query));
+  // Month-Wise Summary Breakdown
+  const monthWiseSummary = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        monthKey: string;
+        label: string;
+        sortKey: number;
+        invoiceCount: number;
+        invoiced: number;
+        paid: number;
+        unpaid: number;
+        overdue: number;
+        expenses: number;
+        netCash: number;
+        invoices: Invoice[];
+      }
+    >();
+
+    filteredInvoices.forEach(inv => {
+      if (inv.status === InvoiceStatus.PROFORMA) return;
+      const d = new Date(inv.date + 'T00:00:00');
+      if (isNaN(d.getTime())) return;
+      const year = d.getFullYear();
+      const month = d.getMonth();
+      const key = `${year}-${String(month + 1).padStart(2, '0')}`;
+      const label = `${MONTH_NAMES[month]?.full || ''} ${year}`;
+      const sortKey = year * 100 + month;
+
+      if (!map.has(key)) {
+        map.set(key, {
+          monthKey: key,
+          label,
+          sortKey,
+          invoiceCount: 0,
+          invoiced: 0,
+          paid: 0,
+          unpaid: 0,
+          overdue: 0,
+          expenses: 0,
+          netCash: 0,
+          invoices: []
+        });
+      }
+
+      const entry = map.get(key)!;
+      const m = calculateInvoiceMetrics(inv, selectedCategories);
+      entry.invoiceCount += 1;
+      entry.invoiced += m.total;
+      if (inv.status === InvoiceStatus.PAID) {
+        entry.paid += m.total;
+      } else {
+        entry.unpaid += m.total;
+        if (isEffectiveOverdue(inv)) {
+          entry.overdue += m.total;
+        }
+      }
+      entry.netCash = entry.paid - entry.expenses;
+      entry.invoices.push(inv);
+    });
+
+    filteredExpenses.forEach(exp => {
+      const d = new Date(exp.date + 'T00:00:00');
+      if (isNaN(d.getTime())) return;
+      const year = d.getFullYear();
+      const month = d.getMonth();
+      const key = `${year}-${String(month + 1).padStart(2, '0')}`;
+      const label = `${MONTH_NAMES[month]?.full || ''} ${year}`;
+      const sortKey = year * 100 + month;
+
+      if (!map.has(key)) {
+        map.set(key, {
+          monthKey: key,
+          label,
+          sortKey,
+          invoiceCount: 0,
+          invoiced: 0,
+          paid: 0,
+          unpaid: 0,
+          overdue: 0,
+          expenses: 0,
+          netCash: 0,
+          invoices: []
+        });
+      }
+
+      const entry = map.get(key)!;
+      entry.expenses += exp.amount || 0;
+      entry.netCash = entry.paid - entry.expenses;
+    });
+
+    return Array.from(map.values()).sort((a, b) =>
+      sortDirection === 'desc' ? b.sortKey - a.sortKey : a.sortKey - b.sortKey
+    );
+  }, [filteredInvoices, filteredExpenses, selectedCategories, sortDirection]);
+
+  // Category-Wise Breakdown (Paid vs Unpaid per Category)
+  const categoryWiseSummary = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        category: string;
+        type: 'Service / Revenue' | 'Operating Expense';
+        count: number;
+        totalAmount: number;
+        paidAmount: number;
+        unpaidAmount: number;
+      }
+    >();
+
+    filteredInvoices.forEach(inv => {
+      if (inv.status === InvoiceStatus.PROFORMA) return;
+      const discountFactor = 1 - (inv.discount || 0) / 100;
+      const taxFactor = 1 + (inv.taxRate || 0) / 100;
+
+      (inv.items || []).forEach(item => {
+        const cat = item.category || item.service || 'General Service';
+        if (
+          selectedCategories.length > 0 &&
+          !selectedCategories.includes(item.category || '') &&
+          !selectedCategories.includes(item.service || '')
+        ) {
+          return;
+        }
+
+        const itemGross = (item.quantity || 0) * (item.rate || 0) * discountFactor * taxFactor;
+        const key = `REV:${cat}`;
+        if (!map.has(key)) {
+          map.set(key, {
+            category: cat,
+            type: 'Service / Revenue',
+            count: 0,
+            totalAmount: 0,
+            paidAmount: 0,
+            unpaidAmount: 0
+          });
+        }
+        const entry = map.get(key)!;
+        entry.count += 1;
+        entry.totalAmount += itemGross;
+        if (inv.status === InvoiceStatus.PAID) {
+          entry.paidAmount += itemGross;
+        } else {
+          entry.unpaidAmount += itemGross;
+        }
       });
-  }, [clientInvoices, statusFilter, searchInvoice]);
+    });
 
-  // Handle Download CSV Settlement
-  const handleDownloadSettlementCSV = () => {
-    if (!client) return;
+    filteredExpenses.forEach(exp => {
+      const cat = exp.category || 'Uncategorized Expense';
+      const key = `EXP:${cat}`;
+      if (!map.has(key)) {
+        map.set(key, {
+          category: cat,
+          type: 'Operating Expense',
+          count: 0,
+          totalAmount: 0,
+          paidAmount: 0,
+          unpaidAmount: 0
+        });
+      }
+      const entry = map.get(key)!;
+      entry.count += 1;
+      entry.totalAmount += exp.amount || 0;
+      entry.paidAmount += exp.amount || 0;
+    });
 
+    return Array.from(map.values()).sort((a, b) => b.totalAmount - a.totalAmount);
+  }, [filteredInvoices, filteredExpenses, selectedCategories]);
+
+  // Human-readable active period description
+  const activePeriodLabel = useMemo(() => {
+    if (dateFilterMode === 'all') return 'All Time';
+    if (dateFilterMode === 'today') return `Today (${formatDate(new Date().toISOString().split('T')[0])})`;
+    if (dateFilterMode === 'last_7_days') return 'Last 7 Days';
+    if (dateFilterMode === 'last_30_days') return 'Last 30 Days';
+    if (dateFilterMode === 'this_quarter') return `Current Quarter (${new Date().getFullYear()})`;
+    if (dateFilterMode === 'this_year') return `Full Year ${new Date().getFullYear()}`;
+    if (dateFilterMode === 'month_wise') {
+      if (selectedMonths.length === 0) return `All Months — ${selectedYear}`;
+      const names = [...selectedMonths]
+        .sort((a, b) => a - b)
+        .map(m => MONTH_NAMES[m]?.short)
+        .join(', ');
+      return `${names} ${selectedYear}`;
+    }
+    if (dateFilterMode === 'date_range') {
+      const from = customStartDate ? formatDate(customStartDate) : 'Start';
+      const to = customEndDate ? formatDate(customEndDate) : 'Present';
+      return `${from} to ${to}`;
+    }
+    return 'Custom Period';
+  }, [dateFilterMode, selectedYear, selectedMonths, customStartDate, customEndDate]);
+
+  const toggleMonthSelection = (monthIndex: number) => {
+    setDateFilterMode('month_wise');
+    setSelectedMonths(prev =>
+      prev.includes(monthIndex) ? prev.filter(m => m !== monthIndex) : [...prev, monthIndex]
+    );
+  };
+
+  const toggleCategorySelection = (category: string) => {
+    setSelectedCategories(prev =>
+      prev.includes(category) ? prev.filter(c => c !== category) : [...prev, category]
+    );
+  };
+
+  const handleResetFilters = () => {
+    setDateFilterMode('all');
+    setSelectedMonths([]);
+    setCustomStartDate('');
+    setCustomEndDate('');
+    setStatusFilter('all');
+    setPaymentMethodFilter('ALL');
+    setSelectedCategories([]);
+    setSearchQuery('');
+  };
+
+  const handleQuickMarkPaid = (inv: Invoice, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!onUpdateInvoice) return;
+    onUpdateInvoice({
+      ...inv,
+      status: InvoiceStatus.PAID,
+      paymentDate: new Date().toISOString().split('T')[0],
+      paymentMethod: inv.paymentMethod || PaymentMethod.BANK_TRANSFER
+    });
+  };
+
+  const handleExportCSV = () => {
+    const scopeName = selectedClient
+      ? (selectedClient.company || selectedClient.name).replace(/\s+/g, '_')
+      : 'All_Clients';
     const headers = [
-      'Statement Date',
-      'Invoice Number',
-      'Services / Description',
-      'Subtotal (AED)',
-      'VAT 5% (AED)',
-      'Total Amount (AED)',
-      'Settlement Status',
-      'Payment Date',
-      'Payment Method'
+      'Record Type',
+      'Document ID',
+      'Date',
+      'Due Date',
+      'Client / Vendor',
+      'Categories / Services',
+      'Description',
+      'Status',
+      'Payment Method',
+      `Subtotal (${currencySymbol})`,
+      `Tax (${currencySymbol})`,
+      `Total Amount (${currencySymbol})`,
+      `Paid Amount (${currencySymbol})`,
+      `Unpaid Balance (${currencySymbol})`
     ];
 
-    const rows = clientInvoices.map(inv => {
-      const subtotal = calculateInvoiceSubtotal(inv);
-      const vat = calculateInvoiceTax(inv);
-      const total = calculateInvoiceTotal(inv);
-      const descriptions = inv.items.map(i => i.description).join('; ');
+    const rows: any[][] = [];
 
-      return [
-        `"${formatDate(inv.date)}"`,
-        `"${inv.id}"`,
-        `"${descriptions.replace(/"/g, '""')}"`,
-        subtotal.toFixed(2),
-        vat.toFixed(2),
-        total.toFixed(2),
-        `"${inv.status}"`,
-        `"${inv.paymentDate ? formatDate(inv.paymentDate) : 'Pending'}"`,
-        `"${inv.paymentMethod || 'N/A'}"`
-      ];
+    filteredInvoices.forEach(inv => {
+      const m = calculateInvoiceMetrics(inv, selectedCategories);
+      const c = clients.find(cl => cl.id === inv.clientId);
+      const isPaid = inv.status === InvoiceStatus.PAID;
+      rows.push([
+        inv.status === InvoiceStatus.PROFORMA ? 'Proforma Invoice' : 'Tax Invoice',
+        inv.id,
+        formatDate(inv.date),
+        formatDate(inv.dueDate),
+        `"${(c?.company || c?.name || 'Client').replace(/"/g, '""')}"`,
+        `"${m.allCategories.join('; ').replace(/"/g, '""')}"`,
+        `"${m.matchingItems.map(i => i.description || i.service).join(' | ').replace(/"/g, '""')}"`,
+        inv.status,
+        inv.paymentMethod || 'N/A',
+        m.subtotal.toFixed(2),
+        m.tax.toFixed(2),
+        m.total.toFixed(2),
+        isPaid ? m.total.toFixed(2) : '0.00',
+        !isPaid && inv.status !== InvoiceStatus.PROFORMA ? m.total.toFixed(2) : '0.00'
+      ]);
     });
 
-    // Summary row
-    rows.push([]);
-    rows.push(['"SUMMARY"', '""', '""', '""', '""', '""', '""', '""', '""']);
-    rows.push(['"Client Company"', `"${client.company}"`, '""', '""', '""', '""', '""', '""', '""']);
-    rows.push(['"Total Invoiced (AED)"', '""', '""', '""', '""', stats.totalInvoiced.toFixed(2), '""', '""', '""']);
-    rows.push(['"Total Settled / Received (AED)"', '""', '""', '""', '""', stats.totalPaid.toFixed(2), '""', '""', '""']);
-    rows.push(['"Outstanding Balance (AED)"', '""', '""', '""', '""', stats.balance.toFixed(2), '""', '""', '""']);
+    filteredExpenses.forEach(exp => {
+      rows.push([
+        'Operating Expense',
+        exp.receiptNumber || exp.id,
+        formatDate(exp.date),
+        '-',
+        `"${(exp.vendor || 'Vendor').replace(/"/g, '""')}"`,
+        `"${(exp.category || 'Expense').replace(/"/g, '""')}"`,
+        `"${(exp.description || '').replace(/"/g, '""')}"`,
+        'Paid Expense',
+        exp.paymentMethod || 'Cash',
+        exp.amount.toFixed(2),
+        '0.00',
+        exp.amount.toFixed(2),
+        exp.amount.toFixed(2),
+        '0.00'
+      ]);
+    });
 
-    const csvContent = [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
+    const csvContent = [
+      `# ${customStatementTitle} - ${scopeName}`,
+      `# Period: ${activePeriodLabel} | Status Filter: ${statusFilter.toUpperCase()} | Categories: ${selectedCategories.length ? selectedCategories.join(', ') : 'All'}`,
+      headers.join(','),
+      ...rows.map(r => r.join(',')),
+      '',
+      `SUMMARY TOTALS,,,,,,,,,Total Billed:,${stats.totalInvoiced.toFixed(2)},Paid:,${stats.totalPaid.toFixed(2)},Unpaid:,${stats.totalUnpaid.toFixed(2)}`
+    ].join('\n');
+
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `Settlement-Statement-${client.company.replace(/\s+/g, '-')}-${new Date().toISOString().split('T')[0]}.csv`);
-    document.body.appendChild(link);
+    link.href = URL.createObjectURL(blob);
+    link.download = `Statement_${scopeName}_${activePeriodLabel.replace(/[^a-zA-Z0-9]/g, '_')}.csv`;
     link.click();
-    document.body.removeChild(link);
   };
 
-  // Real PDF Settlement Download
-  const handleDownloadSettlementPDF = async () => {
-    if (!showPrintModal) {
-      setShowPrintModal(true);
-    }
-    
+  const handleDownloadStatementPdf = async () => {
+    if (isExportingPdf) return;
     setIsExportingPdf(true);
-    setExportMsg('Rendering Settlement PDF...');
+    setExportMsg('Generating Customized Statement PDF...');
 
+    const scopeName = selectedClient
+      ? (selectedClient.company || selectedClient.name).replace(/\s+/g, '_')
+      : 'Consolidated_Agency';
+
+    setShowPrintModal(true);
     setTimeout(async () => {
-      const filename = `Settlement-Statement-${client?.company?.replace(/\s+/g, '-') || 'Account'}-${new Date().toISOString().split('T')[0]}`;
-      await downloadElementAsPdf('statement-sheet', filename, (status, msg) => {
-        if (msg) setExportMsg(msg);
-      });
-
-      setTimeout(() => {
+      try {
+        await downloadElementAsPdf(
+          'printable-statement-area',
+          `Statement_${scopeName}_${new Date().toISOString().split('T')[0]}.pdf`
+        );
+      } catch (err) {
+        console.error('Statement PDF export error:', err);
+      } finally {
         setIsExportingPdf(false);
         setExportMsg('');
-      }, 1000);
-    }, 400);
+      }
+    }, 350);
   };
 
-  // Real PDF Clearance Certificate Download
-  const handleDownloadCertificatePDF = async () => {
+  const handleDownloadCertificatePdf = async () => {
+    if (isExportingPdf) return;
     setIsExportingPdf(true);
-    setExportMsg('Exporting Clearance Certificate...');
-    const filename = `Settlement-Clearance-${client?.company?.replace(/\s+/g, '-') || 'Client'}`;
-    
-    await downloadElementAsPdf('certificate-sheet', filename, (status, msg) => {
-      if (msg) setExportMsg(msg);
+    setExportMsg('Generating Clearance Certificate PDF...');
+
+    const scopeName = selectedClient
+      ? (selectedClient.company || selectedClient.name).replace(/\s+/g, '_')
+      : 'Consolidated_Agency';
+
+    setShowCertificateModal(true);
+    setTimeout(async () => {
+      try {
+        await downloadElementAsPdf(
+          'printable-certificate-area',
+          `Clearance_Certificate_${scopeName}.pdf`
+        );
+      } catch (err) {
+        console.error('Certificate PDF export error:', err);
+      } finally {
+        setIsExportingPdf(false);
+        setExportMsg('');
+      }
+    }, 350);
+  };
+
+  // Compute running balance for chronological ledger
+  const ledgerWithRunningBalance = useMemo(() => {
+    const asc = [...filteredInvoices].sort(
+      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+    );
+    let runningUnpaid = 0;
+    const balanceMap = new Map<string, number>();
+    asc.forEach(inv => {
+      const m = calculateInvoiceMetrics(inv, selectedCategories);
+      if (inv.status !== InvoiceStatus.PAID && inv.status !== InvoiceStatus.PROFORMA) {
+        runningUnpaid += m.total;
+      }
+      balanceMap.set(inv.id, runningUnpaid);
     });
+    return balanceMap;
+  }, [filteredInvoices, selectedCategories]);
 
-    setTimeout(() => {
-      setIsExportingPdf(false);
-      setExportMsg('');
-    }, 1000);
-  };
-
-  // Dedicated Print Statement
-  const handlePrintStatement = () => {
-    if (!showPrintModal) {
-      setShowPrintModal(true);
-      setTimeout(() => {
-        printElementDirectly('statement-sheet', `Statement of Account - ${client?.company}`);
-      }, 300);
-    } else {
-      printElementDirectly('statement-sheet', `Statement of Account - ${client?.company}`);
-    }
-  };
-
-  const handlePrintCertificate = () => {
-    printElementDirectly('certificate-sheet', `Settlement Clearance - ${client?.company}`);
-  };
-
-  const handleMarkAsPaid = (inv: Invoice, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (onUpdateInvoice) {
-      onUpdateInvoice({
-        ...inv,
-        status: InvoiceStatus.PAID,
-        paymentDate: new Date().toISOString().split('T')[0],
-        paymentMethod: PaymentMethod.BANK_TRANSFER
-      });
-    }
-  };
+  const activeFiltersCount =
+    (dateFilterMode !== 'all' ? 1 : 0) +
+    (statusFilter !== 'all' ? 1 : 0) +
+    (paymentMethodFilter !== 'ALL' ? 1 : 0) +
+    selectedCategories.length +
+    (searchQuery.trim() ? 1 : 0);
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-500 pb-16">
-      {/* Toast Notification when exporting PDF */}
-      {isExportingPdf && (
-        <div className="fixed bottom-6 right-6 bg-slate-900 dark:bg-slate-800 text-white px-5 py-3.5 rounded-2xl shadow-2xl z-[100] flex items-center space-x-3 border border-slate-700 animate-in slide-in-from-bottom-3 no-print">
-          <Loader2 size={18} className="animate-spin text-indigo-400" />
-          <span className="text-xs font-bold">{exportMsg || 'Generating document PDF...'}</span>
-        </div>
-      )}
-
-      {/* Top Header & Action Controls */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white dark:bg-slate-900 p-6 rounded-[32px] border border-slate-200 dark:border-slate-800 shadow-sm no-print">
+    <div className="space-y-6 animate-in fade-in duration-500 pb-16">
+      {/* Top Header & Statement Controls */}
+      <div className="no-print flex flex-col xl:flex-row xl:items-center justify-between gap-4 bg-white dark:bg-darkcard p-6 rounded-3xl border border-slate-200 dark:border-darkborder shadow-sm">
         <div>
-          <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 rounded-2xl bg-indigo-600 flex items-center justify-center text-white font-black shadow-md shadow-indigo-200 dark:shadow-none">
-              <FileText size={22} />
-            </div>
-            <div>
-              <h1 className="text-2xl md:text-3xl font-black text-slate-900 dark:text-white tracking-tight">
-                {t('statements.title', 'Client Statements & Settlements')}
-              </h1>
-              <p className="text-slate-500 dark:text-slate-400 text-xs font-bold uppercase tracking-wider">
-                Account History • Settlement Reports • Clearance Export
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {/* Action Buttons & Client Dropdown */}
-        <div className="flex flex-wrap items-center gap-3">
-          {/* Client selector dropdown */}
-          <div className="flex items-center space-x-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-3.5 py-2 rounded-2xl">
-            <Building2 size={16} className="text-slate-400" />
-            <div className="flex flex-col">
-              <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none">
-                {t('statements.client_label', 'Client:')}
-              </span>
-              <select 
-                value={selectedClientId} 
-                onChange={e => setSelectedClientId(e.target.value)}
-                className="bg-transparent text-xs font-black text-slate-900 dark:text-white outline-none cursor-pointer pr-2 pt-0.5"
-              >
-                {clients.map(c => <option key={c.id} value={c.id} className="dark:bg-slate-900 text-slate-900 dark:text-white">{c.company}</option>)}
-              </select>
-            </div>
-          </div>
-
-          {/* Download Settlement CSV Button */}
-          <button 
-            onClick={handleDownloadSettlementCSV}
-            title="Download Settlement CSV Spreadsheet"
-            className="flex items-center space-x-2 bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 px-4 py-2.5 rounded-2xl font-black text-xs uppercase tracking-wider transition-all shadow-sm active:scale-95"
-          >
-            <FileSpreadsheet size={16} />
-            <span className="hidden sm:inline">Export CSV</span>
-          </button>
-
-          {/* Download / Print Official PDF Statement */}
-          <button 
-            onClick={handleDownloadSettlementPDF}
-            disabled={isExportingPdf}
-            className="flex items-center space-x-2 bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-2xl font-black text-xs uppercase tracking-wider transition-all shadow-lg shadow-indigo-200 dark:shadow-none active:scale-95 disabled:opacity-50"
-          >
-            {isExportingPdf ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
-            <span>Download Settlement PDF</span>
-          </button>
-
-          {/* Quick Print Direct Button */}
-          <button 
-            onClick={handlePrintStatement}
-            title="Quick Print Statement"
-            className="p-2.5 bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 dark:hover:bg-slate-700 text-white rounded-2xl transition-all shadow-md active:scale-95 border border-slate-700"
-          >
-            <Printer size={18} />
-          </button>
-        </div>
-      </div>
-
-      {/* Client Overview & Settlement Stat Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 no-print">
-        {/* Card 1: Total Invoiced */}
-        <div className="bg-white dark:bg-slate-900 p-6 rounded-[28px] border border-slate-200 dark:border-slate-800 shadow-sm">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[11px] font-black text-slate-400 uppercase tracking-widest">
-              {t('statements.total_invoiced', 'Total Invoiced')}
+          <div className="flex items-center gap-2.5">
+            <span className="px-2.5 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/80 text-indigo-600 dark:text-indigo-400 text-[10px] font-black uppercase tracking-widest border border-indigo-100 dark:border-indigo-900/50">
+              Custom Statement Engine
             </span>
-            <span className="text-[10px] font-black text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-full">
-              {stats.totalCount} {t('statements.invoices_suffix', 'Invoices')}
+            <span className="text-[11px] font-bold text-slate-400">
+              • {activePeriodLabel}
             </span>
           </div>
-          <h4 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight flex items-center">
-            <span className="aed-2026">{AED_SYMBOL}</span> {stats.totalInvoiced.toLocaleString()}
-          </h4>
-          <p className="text-[11px] text-slate-400 font-bold mt-2">Inc. 5% VAT: AED {stats.totalVat.toLocaleString()}</p>
-        </div>
-
-        {/* Card 2: Total Settled / Received */}
-        <div className="bg-white dark:bg-slate-900 p-6 rounded-[28px] border border-emerald-100 dark:border-emerald-900/60 bg-emerald-50/40 dark:bg-emerald-950/20 shadow-sm">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[11px] font-black text-emerald-700 dark:text-emerald-400 uppercase tracking-widest">
-              {t('statements.total_settled', 'Total Settled')}
-            </span>
-            <span className="text-[10px] font-black text-emerald-800 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-950 px-2 py-0.5 rounded-full flex items-center gap-1">
-              <CheckCircle2 size={10} /> {stats.paidCount} Paid
-            </span>
-          </div>
-          <h4 className="text-2xl font-black text-emerald-700 dark:text-emerald-400 tracking-tight flex items-center">
-            <span className="aed-2026">{AED_SYMBOL}</span> {stats.totalPaid.toLocaleString()}
-          </h4>
-          <div className="w-full bg-emerald-200/60 dark:bg-emerald-950 rounded-full h-1.5 mt-3 overflow-hidden">
-            <div className="bg-emerald-600 h-full rounded-full" style={{ width: `${stats.settlementRate}%` }}></div>
-          </div>
-        </div>
-
-        {/* Card 3: Outstanding Balance */}
-        <div className={`p-6 rounded-[28px] border shadow-sm ${
-          stats.balance > 0 
-            ? 'bg-rose-50/50 dark:bg-rose-950/20 border-rose-200 dark:border-rose-900/60 text-rose-900 dark:text-rose-300' 
-            : 'bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-300'
-        }`}>
-          <div className="flex items-center justify-between mb-2">
-            <span className={`text-[11px] font-black uppercase tracking-widest ${stats.balance > 0 ? 'text-rose-700 dark:text-rose-400' : 'text-slate-500'}`}>
-              {t('statements.outstanding_balance', 'Outstanding Balance')}
-            </span>
-            {stats.balance > 0 ? (
-              <span className="text-[10px] font-black text-rose-800 dark:text-rose-300 bg-rose-100 dark:bg-rose-950 px-2 py-0.5 rounded-full flex items-center gap-1">
-                <AlertCircle size={10} /> {stats.pendingCount} Due
-              </span>
-            ) : (
-              <span className="text-[10px] font-black text-emerald-800 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-950 px-2 py-0.5 rounded-full">
-                Fully Settled
-              </span>
-            )}
-          </div>
-          <h4 className={`text-2xl font-black tracking-tight flex items-center ${stats.balance > 0 ? 'text-rose-700 dark:text-rose-400' : 'text-slate-900 dark:text-white'}`}>
-            <span className="aed-2026">{AED_SYMBOL}</span> {stats.balance.toLocaleString()}
-          </h4>
-          <p className={`text-[11px] font-bold mt-2 ${stats.balance > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-400'}`}>
-            {stats.balance > 0 ? 'Action required for settlement' : 'Account in good standing'}
+          <h1 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight mt-1">
+            {t('statements.title', 'Statements & Custom Financial Ledgers')}
+          </h1>
+          <p className="text-slate-500 dark:text-slate-400 text-xs font-medium">
+            Customize statements date-wise, month-wise, paid/unpaid status, and service or expense category.
           </p>
         </div>
 
-        {/* Card 4: Client Info & Settlement Certificate */}
-        <div className="bg-slate-900 dark:bg-slate-800/90 border border-slate-800 dark:border-slate-700 p-6 rounded-[28px] text-white shadow-xl flex flex-col justify-between">
-          <div>
-            <span className="text-[10px] font-black text-indigo-300 uppercase tracking-widest block mb-1">Client Profile</span>
-            <h4 className="text-base font-black truncate">{client?.company || 'Company'}</h4>
-            <p className="text-xs text-slate-400 font-medium truncate mt-0.5">{client?.email || 'N/A'}</p>
-            {client?.trn && (
-              <p className="text-[10px] text-slate-400 font-mono mt-1">TRN: {client.trn}</p>
-            )}
+        <div className="flex flex-wrap items-center gap-2.5">
+          {/* Client Scope Selector */}
+          <div className="relative min-w-[230px]">
+            <Building2 className="absolute left-3.5 top-1/2 -translate-y-1/2 text-indigo-500" size={15} />
+            <select
+              value={selectedClientId}
+              onChange={e => setSelectedClientId(e.target.value)}
+              className="w-full pl-9 pr-8 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-black text-slate-900 dark:text-white text-xs outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+            >
+              <option value="ALL">🌍 All Clients (Consolidated Statement)</option>
+              {clients.map(c => (
+                <option key={c.id} value={c.id}>
+                  🏢 {c.company || c.name}
+                </option>
+              ))}
+            </select>
           </div>
 
           <button
-            onClick={() => setShowCertificateModal(true)}
-            className="mt-3 w-full py-2 rounded-xl bg-white/10 hover:bg-white/20 text-indigo-200 hover:text-white text-xs font-bold transition-colors flex items-center justify-center space-x-1.5 border border-white/10"
+            onClick={() => setShowCustomizerDrawer(!showCustomizerDrawer)}
+            className={`flex items-center space-x-2 px-4 py-2.5 rounded-xl font-black text-xs transition-all border ${
+              showCustomizerDrawer
+                ? 'bg-indigo-600 text-white border-indigo-600 shadow-lg shadow-indigo-100 dark:shadow-none'
+                : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50'
+            }`}
           >
-            <ShieldCheck size={14} />
-            <span>Settlement Clearance</span>
+            <SlidersHorizontal size={15} />
+            <span>Customize PDF Layout</span>
+          </button>
+
+          <button
+            onClick={handleExportCSV}
+            className="flex items-center space-x-2 px-4 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl font-bold text-xs hover:bg-slate-50 transition-all shadow-sm"
+          >
+            <FileSpreadsheet size={15} className="text-emerald-600" />
+            <span>CSV / Excel</span>
+          </button>
+
+          <button
+            onClick={() => setShowPrintModal(true)}
+            className="flex items-center space-x-2 px-4 py-2.5 bg-slate-900 dark:bg-slate-700 text-white rounded-xl font-bold text-xs hover:bg-slate-800 transition-all shadow-sm"
+          >
+            <Printer size={15} />
+            <span>Preview & Print</span>
+          </button>
+
+          <button
+            onClick={handleDownloadStatementPdf}
+            disabled={isExportingPdf}
+            className="flex items-center space-x-2 px-5 py-2.5 bg-indigo-600 text-white rounded-xl font-black text-xs hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 dark:shadow-none disabled:opacity-60"
+          >
+            {isExportingPdf ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />}
+            <span>{isExportingPdf && exportMsg ? exportMsg : 'Download PDF'}</span>
           </button>
         </div>
       </div>
 
-      {/* Account History / Ledger Table */}
-      <div className="bg-white dark:bg-slate-900 rounded-[32px] border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm no-print">
-        {/* Table Header & Search Filter Bar */}
-        <div className="p-6 border-b border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div>
-            <h3 className="font-black text-slate-900 dark:text-white text-lg">Transaction Ledger & Invoices</h3>
+      {/* PDF Layout Customizer Collapsible Drawer */}
+      {showCustomizerDrawer && (
+        <div className="no-print bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-900/60 rounded-3xl p-6 space-y-4 animate-in slide-in-from-top-2 duration-200">
+          <div className="flex items-center justify-between border-b border-indigo-100 dark:border-indigo-900/50 pb-3">
+            <div className="flex items-center gap-2">
+              <SlidersHorizontal size={16} className="text-indigo-600 dark:text-indigo-400" />
+              <h3 className="text-xs font-black uppercase tracking-wider text-indigo-950 dark:text-indigo-200">
+                Statement Document & PDF Customization Options
+              </h3>
+            </div>
+            <button
+              onClick={() => setShowCustomizerDrawer(false)}
+              className="text-slate-400 hover:text-slate-700 dark:hover:text-white p-1"
+            >
+              <X size={16} />
+            </button>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
-            {/* Search Input */}
-            <div className="relative">
-              <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1.5">
+                Statement Heading Title
+              </label>
               <input
                 type="text"
-                placeholder="Search invoice or service..."
-                value={searchInvoice}
-                onChange={e => setSearchInvoice(e.target.value)}
-                className="pl-9 pr-4 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-800 dark:text-white placeholder-slate-400 outline-none focus:ring-2 focus:ring-indigo-500 w-48 sm:w-56"
+                value={customStatementTitle}
+                onChange={e => setCustomStatementTitle(e.target.value)}
+                placeholder="STATEMENT OF ACCOUNT"
+                className="w-full px-3.5 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
               />
             </div>
 
-            {/* Status Filter Chips */}
-            <div className="flex bg-slate-100 dark:bg-slate-800 p-1 rounded-xl text-xs border border-slate-200 dark:border-slate-700">
+            <div className="md:col-span-2">
+              <label className="block text-[10px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1.5">
+                Custom Statement Footer / Payment Instructions
+              </label>
+              <input
+                type="text"
+                value={customFooterNote}
+                onChange={e => setCustomFooterNote(e.target.value)}
+                className="w-full px-3.5 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-800 dark:text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3 pt-1">
+            {[
+              {
+                label: 'Include Month-Wise Summary Table',
+                checked: showMonthSummaryInPdf,
+                onChange: setShowMonthSummaryInPdf
+              },
+              {
+                label: 'Include Category Breakdown Table',
+                checked: showCategorySummaryInPdf,
+                onChange: setShowCategorySummaryInPdf
+              },
+              {
+                label: 'Show Line-Item Descriptions & Categories',
+                checked: showLineItemDetailsInPdf,
+                onChange: setShowLineItemDetailsInPdf
+              },
+              {
+                label: 'Show Running Balance Column',
+                checked: showRunningBalanceInPdf,
+                onChange: setShowRunningBalanceInPdf
+              },
+              {
+                label: 'Show Bank Details & Stamp Block',
+                checked: showBankDetailsInPdf,
+                onChange: setShowBankDetailsInPdf
+              }
+            ].map((opt, idx) => (
+              <label
+                key={idx}
+                className="flex items-center space-x-2 px-3.5 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200 cursor-pointer select-none"
+              >
+                <input
+                  type="checkbox"
+                  checked={opt.checked}
+                  onChange={e => opt.onChange(e.target.checked)}
+                  className="rounded text-indigo-600 focus:ring-indigo-500"
+                />
+                <span>{opt.label}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* MASTER CUSTOMIZATION & FILTER PANEL (Date-Wise, Month-Wise, Paid/Unpaid, Category-Based) */}
+      <div className="no-print bg-white dark:bg-darkcard rounded-3xl border border-slate-200 dark:border-darkborder shadow-sm p-6 space-y-5">
+        {/* Row 1: Statement Mode & Grouping View Tabs */}
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-darkborder">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 mr-1">
+              Statement Mode:
+            </span>
+            {[
+              { id: 'invoices', label: 'Client Invoices (Receivables)', icon: <FileText size={13} /> },
+              { id: 'expenses', label: 'Operating Expenses', icon: <Wallet size={13} /> },
+              { id: 'combined', label: 'Combined Cashflow & P&L', icon: <BarChart3 size={13} /> }
+            ].map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => {
+                  setStatementType(tab.id as StatementTypeMode);
+                  setSelectedCategories([]);
+                }}
+                className={`flex items-center space-x-1.5 px-3.5 py-2 rounded-xl text-xs font-black transition-all ${
+                  statementType === tab.id
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
+                }`}
+              >
+                {tab.icon}
+                <span>{tab.label}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 mr-1">
+              Group & View By:
+            </span>
+            {[
+              { id: 'chronological', label: 'Date-Wise Ledger', icon: <Calendar size={13} /> },
+              { id: 'month_wise', label: 'Month-Wise Summary', icon: <CalendarDays size={13} /> },
+              { id: 'category_wise', label: 'Category Breakdown', icon: <PieChart size={13} /> },
+              { id: 'paid_unpaid_split', label: 'Paid vs Unpaid Split', icon: <Layers size={13} /> }
+            ].map(g => (
+              <button
+                key={g.id}
+                onClick={() => setGroupingMode(g.id as GroupingMode)}
+                className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all ${
+                  groupingMode === g.id
+                    ? 'bg-slate-900 dark:bg-indigo-500 text-white'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
+                }`}
+              >
+                {g.icon}
+                <span>{g.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Row 2: Date-Wise & Month-Wise Customization */}
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <CalendarRange size={15} className="text-indigo-600 dark:text-indigo-400" />
+              <span className="text-xs font-black uppercase tracking-wider text-slate-700 dark:text-slate-200">
+                1. Date-Wise & Month-Wise Period Filter
+              </span>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5">
               {[
-                { id: 'all', label: 'All' },
-                { id: 'settled', label: 'Settled (Paid)' },
-                { id: 'unsettled', label: 'Unsettled' }
-              ].map(f => (
+                { id: 'all', label: 'All Time' },
+                { id: 'month_wise', label: 'Month-Wise Picker' },
+                { id: 'date_range', label: 'Custom Date-Wise Range' },
+                { id: 'today', label: 'Today' },
+                { id: 'last_7_days', label: 'Last 7 Days' },
+                { id: 'last_30_days', label: 'Last 30 Days' },
+                { id: 'this_quarter', label: 'This Quarter' },
+                { id: 'this_year', label: 'This Year' }
+              ].map(preset => (
                 <button
-                  key={f.id}
-                  onClick={() => setStatusFilter(f.id as any)}
-                  className={`px-3 py-1 rounded-lg font-bold transition-all text-xs ${
-                    statusFilter === f.id
-                      ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm font-black'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  key={preset.id}
+                  onClick={() => setDateFilterMode(preset.id as DateFilterMode)}
+                  className={`px-3 py-1.5 rounded-xl text-[11px] font-black transition-all ${
+                    dateFilterMode === preset.id
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
                   }`}
                 >
-                  {f.label}
+                  {preset.label}
                 </button>
               ))}
             </div>
           </div>
-        </div>
 
-        {/* Ledger Table */}
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-slate-50/75 dark:bg-slate-800/40 border-b border-slate-100 dark:border-slate-800">
-                <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-wider">Date</th>
-                <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-wider">Invoice # (Click for Details)</th>
-                <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-wider">Service Scope</th>
-                <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-wider">Settlement Status</th>
-                <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-wider text-right">Taxable Subtotal</th>
-                <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-wider text-right">Total Amount (AED)</th>
-                <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-wider text-center">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
-              {displayedInvoices.length > 0 ? (
-                displayedInvoices.map((inv) => {
-                  const subtotal = calculateInvoiceSubtotal(inv);
-                  const total = calculateInvoiceTotal(inv);
-                  const isPaid = inv.status === InvoiceStatus.PAID;
-                  const isOverdue = inv.status === InvoiceStatus.OVERDUE;
+          {/* Month-Wise Interactive Selector Bar */}
+          {dateFilterMode === 'month_wise' && (
+            <div className="p-4 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-700/80 flex flex-col md:flex-row md:items-center justify-between gap-4 animate-in fade-in duration-200">
+              <div className="flex items-center space-x-2">
+                <span className="text-[11px] font-black uppercase text-slate-400">Year:</span>
+                <div className="flex items-center space-x-1">
+                  {availableYears.map(yr => (
+                    <button
+                      key={yr}
+                      onClick={() => setSelectedYear(yr)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all ${
+                        selectedYear === yr
+                          ? 'bg-slate-900 dark:bg-indigo-600 text-white'
+                          : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700'
+                      }`}
+                    >
+                      {yr}
+                    </button>
+                  ))}
+                </div>
+              </div>
 
+              <div className="flex flex-wrap items-center gap-1.5 flex-1">
+                <button
+                  onClick={() => setSelectedMonths([])}
+                  className={`px-2.5 py-1.5 rounded-lg text-[11px] font-black transition-all ${
+                    selectedMonths.length === 0
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-white dark:bg-slate-800 text-slate-500 border border-slate-200 dark:border-slate-700'
+                  }`}
+                >
+                  All 12 Months
+                </button>
+                {MONTH_NAMES.map(m => {
+                  const isSelected = selectedMonths.includes(m.index);
                   return (
-                    <tr key={inv.id} className="hover:bg-indigo-50/30 dark:hover:bg-indigo-950/20 transition-colors group">
-                      {/* Date */}
-                      <td className="px-6 py-4 text-xs font-bold text-slate-600 dark:text-slate-300 whitespace-nowrap">
-                        <div className="flex items-center space-x-1.5">
-                          <Calendar size={13} className="text-slate-400" />
-                          <span>{formatDate(inv.date)}</span>
-                        </div>
-                      </td>
-
-                      {/* Invoice ID - Interactive Clickable */}
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <button
-                          onClick={() => onSelectInvoice && onSelectInvoice(inv.id)}
-                          className="inline-flex items-center space-x-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 group-hover:border-indigo-500 group-hover:bg-indigo-600 group-hover:text-white px-3 py-1.5 rounded-xl font-black text-xs text-slate-900 dark:text-white transition-all shadow-sm"
-                          title="Click to open invoice details & edit"
-                        >
-                          <FileText size={13} className="text-indigo-600 dark:text-indigo-400 group-hover:text-white transition-colors" />
-                          <span className="underline decoration-indigo-200 dark:decoration-indigo-800 underline-offset-2">{inv.id}</span>
-                          <ArrowUpRight size={13} className="text-slate-400 group-hover:text-white transition-colors" />
-                        </button>
-                      </td>
-
-                      {/* Service Scope */}
-                      <td className="px-6 py-4 max-w-xs">
-                        <div className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate">
-                          {inv.items.map(i => i.description).join(', ') || 'Custom Media Production'}
-                        </div>
-                        <span className="text-[10px] text-slate-400 font-medium">
-                          {inv.items.length} item{inv.items.length !== 1 ? 's' : ''} • Due {formatDate(inv.dueDate)}
-                        </span>
-                      </td>
-
-                      {/* Status */}
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-xs font-black uppercase tracking-wider ${
-                          isPaid 
-                            ? 'bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300' 
-                            : isOverdue 
-                            ? 'bg-rose-100 dark:bg-rose-950 text-rose-800 dark:text-rose-300 animate-pulse' 
-                            : 'bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300'
-                        }`}>
-                          {isPaid ? <CheckCircle2 size={12} /> : isOverdue ? <AlertCircle size={12} /> : <Clock size={12} />}
-                          <span>{inv.status}</span>
-                        </span>
-                      </td>
-
-                      {/* Subtotal */}
-                      <td className="px-6 py-4 text-right text-xs font-bold text-slate-600 dark:text-slate-300 whitespace-nowrap">
-                        {AED_SYMBOL} {subtotal.toLocaleString()}
-                      </td>
-
-                      {/* Total */}
-                      <td className="px-6 py-4 text-right whitespace-nowrap">
-                        <span className="text-sm font-black text-indigo-600 dark:text-indigo-400">
-                          {AED_SYMBOL} {total.toLocaleString()}
-                        </span>
-                      </td>
-
-                      {/* Actions */}
-                      <td className="px-6 py-4 text-center whitespace-nowrap">
-                        <div className="flex items-center justify-center space-x-2">
-                          <button
-                            onClick={() => onSelectInvoice && onSelectInvoice(inv.id)}
-                            className="p-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-indigo-600 hover:text-white text-slate-600 dark:text-slate-300 transition-all"
-                            title="Open Invoice Details"
-                          >
-                            <ExternalLink size={14} />
-                          </button>
-                          {!isPaid && onUpdateInvoice && (
-                            <button
-                              onClick={(e) => handleMarkAsPaid(inv, e)}
-                              className="px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950 hover:bg-emerald-600 text-emerald-700 dark:text-emerald-300 hover:text-white font-black text-[10px] uppercase tracking-wider transition-all border border-emerald-200 dark:border-emerald-800"
-                              title="Settle / Mark as Paid"
-                            >
-                              Settle
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
+                    <button
+                      key={m.index}
+                      onClick={() => toggleMonthSelection(m.index)}
+                      className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition-all ${
+                        isSelected
+                          ? 'bg-indigo-600 text-white shadow-sm'
+                          : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:border-indigo-300'
+                      }`}
+                    >
+                      {m.short}
+                    </button>
                   );
-                })
-              ) : (
-                <tr>
-                  <td colSpan={7} className="px-6 py-12 text-center text-slate-400 font-medium">
-                    No transactions found matching your criteria.
-                  </td>
-                </tr>
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Custom Date-Wise Range Pickers */}
+          {dateFilterMode === 'date_range' && (
+            <div className="p-4 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-700/80 flex flex-wrap items-center gap-4 animate-in fade-in duration-200">
+              <div className="flex items-center space-x-2">
+                <label className="text-xs font-black text-slate-600 dark:text-slate-300">From Date:</label>
+                <input
+                  type="date"
+                  value={customStartDate}
+                  onChange={e => setCustomStartDate(e.target.value)}
+                  className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+              <div className="flex items-center space-x-2">
+                <label className="text-xs font-black text-slate-600 dark:text-slate-300">To Date:</label>
+                <input
+                  type="date"
+                  value={customEndDate}
+                  onChange={e => setCustomEndDate(e.target.value)}
+                  className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+              {(customStartDate || customEndDate) && (
+                <button
+                  onClick={() => {
+                    setCustomStartDate('');
+                    setCustomEndDate('');
+                  }}
+                  className="text-xs font-bold text-rose-600 hover:underline"
+                >
+                  Clear Dates
+                </button>
               )}
-            </tbody>
-          </table>
+            </div>
+          )}
         </div>
 
-        {/* Table Footer Summary */}
-        <div className="p-6 bg-slate-50/80 dark:bg-slate-800/40 border-t border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row justify-between items-center gap-4 text-xs font-bold text-slate-600 dark:text-slate-400">
-          <div className="flex items-center space-x-2">
-            <span>Showing {displayedInvoices.length} of {clientInvoices.length} transactions for</span>
-            <strong className="text-slate-900 dark:text-white">{client?.company}</strong>
+        {/* Row 3: Paid / Unpaid Status & Payment Method Filter */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 pt-2 border-t border-slate-100 dark:border-darkborder">
+          <div className="lg:col-span-8 space-y-2">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 size={15} className="text-emerald-600" />
+              <span className="text-xs font-black uppercase tracking-wider text-slate-700 dark:text-slate-200">
+                2. Paid / Unpaid Status Filter
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {[
+                { id: 'all', label: 'All Statuses', badgeColor: 'bg-slate-900 text-white' },
+                { id: 'paid', label: '✅ Paid Only (Settled)', badgeColor: 'bg-emerald-600 text-white' },
+                { id: 'unpaid', label: '⏳ Unpaid (Pending + Overdue)', badgeColor: 'bg-rose-600 text-white' },
+                { id: 'overdue', label: '🚨 Overdue Only', badgeColor: 'bg-red-600 text-white' },
+                { id: 'sent', label: '📤 Sent / Awaiting Payment', badgeColor: 'bg-amber-500 text-white' },
+                { id: 'proforma', label: '📄 Proforma Invoices', badgeColor: 'bg-purple-600 text-white' },
+                { id: 'draft', label: '📝 Drafts', badgeColor: 'bg-slate-600 text-white' }
+              ].map(st => (
+                <button
+                  key={st.id}
+                  onClick={() => setStatusFilter(st.id as StatusFilterMode)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all ${
+                    statusFilter === st.id
+                      ? `${st.badgeColor} shadow-sm`
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
+                  }`}
+                >
+                  {st.label}
+                </button>
+              ))}
+            </div>
           </div>
-          <div className="flex items-center space-x-4">
-            <span>Total Invoiced: <strong className="text-slate-900 dark:text-white">{AED_SYMBOL} {stats.totalInvoiced.toLocaleString()}</strong></span>
-            <span>Settled: <strong className="text-emerald-600 dark:text-emerald-400">{AED_SYMBOL} {stats.totalPaid.toLocaleString()}</strong></span>
-            <span>Balance: <strong className="text-rose-600 dark:text-rose-400">{AED_SYMBOL} {stats.balance.toLocaleString()}</strong></span>
+
+          <div className="lg:col-span-4 space-y-2">
+            <div className="flex items-center gap-2">
+              <CreditCard size={15} className="text-indigo-500" />
+              <span className="text-xs font-black uppercase tracking-wider text-slate-700 dark:text-slate-200">
+                Payment Method
+              </span>
+            </div>
+            <select
+              value={paymentMethodFilter}
+              onChange={e => setPaymentMethodFilter(e.target.value)}
+              className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-800 dark:text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500"
+            >
+              <option value="ALL">All Payment Methods</option>
+              {Object.values(PaymentMethod).map(pm => (
+                <option key={pm} value={pm}>
+                  {pm}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {/* Row 4: Category-Based Filter (Service Categories & Expense Categories) + Search */}
+        <div className="pt-2 border-t border-slate-100 dark:border-darkborder space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Tag size={15} className="text-purple-600" />
+              <span className="text-xs font-black uppercase tracking-wider text-slate-700 dark:text-slate-200">
+                3. Category-Based Filter ({statementType === 'expenses' ? 'Expense Categories' : 'Service & Billing Categories'})
+              </span>
+              {selectedCategories.length > 0 && (
+                <button
+                  onClick={() => setSelectedCategories([])}
+                  className="text-[11px] font-bold text-indigo-600 hover:underline ml-2"
+                >
+                  Clear ({selectedCategories.length} selected)
+                </button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <div className="relative w-full sm:w-64">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+                <input
+                  type="text"
+                  placeholder="Search ID, client, service, vendor..."
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  className="w-full pl-8 pr-7 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-medium text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                  >
+                    <X size={13} />
+                  </button>
+                )}
+              </div>
+
+              <button
+                onClick={() => setSortDirection(prev => (prev === 'desc' ? 'asc' : 'desc'))}
+                title="Toggle Date Sort Order"
+                className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-bold flex items-center space-x-1 hover:bg-slate-200"
+              >
+                <ArrowUpDown size={13} />
+                <span>{sortDirection === 'desc' ? 'Newest' : 'Oldest'}</span>
+              </button>
+
+              {activeFiltersCount > 0 && (
+                <button
+                  onClick={handleResetFilters}
+                  className="px-3 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 text-xs font-black flex items-center space-x-1 hover:bg-rose-100"
+                >
+                  <RotateCcw size={13} />
+                  <span>Reset ({activeFiltersCount})</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              onClick={() => setSelectedCategories([])}
+              className={`px-3 py-1.5 rounded-xl text-[11px] font-black transition-all ${
+                selectedCategories.length === 0
+                  ? 'bg-purple-600 text-white shadow-sm'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
+              }`}
+            >
+              All Categories
+            </button>
+            {allAvailableCategories.map(cat => {
+              const isSelected = selectedCategories.includes(cat);
+              return (
+                <button
+                  key={cat}
+                  onClick={() => toggleCategorySelection(cat)}
+                  className={`flex items-center space-x-1 px-3 py-1.5 rounded-xl text-[11px] font-bold transition-all ${
+                    isSelected
+                      ? 'bg-purple-600 text-white shadow-sm'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
+                  }`}
+                >
+                  {isSelected && <Check size={11} />}
+                  <span>{cat}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>
 
-      {/* ========================================================================= */}
-      {/* FULL PRINTABLE SETTLEMENT STATEMENT VIEW (Visible in Print or Modal) */}
-      {/* ========================================================================= */}
-      {showPrintModal && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto no-print">
-          <div className="bg-white dark:bg-slate-900 rounded-[32px] max-w-4xl w-full max-h-[90vh] flex flex-col shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden">
-            {/* Modal Top Bar */}
-            <div className="p-5 bg-slate-900 dark:bg-slate-950 text-white flex items-center justify-between border-b border-slate-800">
-              <div className="flex items-center space-x-3">
-                <div className="w-9 h-9 rounded-xl bg-indigo-600 flex items-center justify-center text-white font-black">
-                  <Printer size={18} />
+      {/* KPI SUMMARY CARDS (Dynamic based on Date, Month, Paid/Unpaid, Category filters) */}
+      <div className="no-print grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="bg-white dark:bg-darkcard p-5 rounded-3xl border border-slate-200 dark:border-darkborder shadow-sm">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+              Total Billed (Filtered)
+            </span>
+            <div className="w-8 h-8 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 flex items-center justify-center">
+              <FileText size={16} />
+            </div>
+          </div>
+          <p className="text-2xl font-black text-slate-900 dark:text-white">
+            {currencySymbol} {stats.totalInvoiced.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </p>
+          <p className="text-[11px] font-bold text-slate-400 mt-1">
+            {filteredInvoices.filter(i => i.status !== InvoiceStatus.PROFORMA).length} finalized invoices • VAT: {currencySymbol} {stats.totalTax.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+          </p>
+        </div>
+
+        <div className="bg-emerald-50/70 dark:bg-emerald-950/20 p-5 rounded-3xl border border-emerald-200 dark:border-emerald-900/50 shadow-sm">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] font-black text-emerald-700 dark:text-emerald-400 uppercase tracking-widest">
+              Total Paid / Settled
+            </span>
+            <div className="w-8 h-8 rounded-xl bg-emerald-100 dark:bg-emerald-900/50 text-emerald-600 flex items-center justify-center">
+              <CheckCircle2 size={16} />
+            </div>
+          </div>
+          <p className="text-2xl font-black text-emerald-700 dark:text-emerald-400">
+            {currencySymbol} {stats.totalPaid.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </p>
+          <p className="text-[11px] font-bold text-emerald-600/80 dark:text-emerald-500 mt-1">
+            {stats.paidCount} paid invoices ({stats.totalInvoiced > 0 ? Math.round((stats.totalPaid / stats.totalInvoiced) * 100) : 0}% collection rate)
+          </p>
+        </div>
+
+        <div className="bg-rose-50/70 dark:bg-rose-950/20 p-5 rounded-3xl border border-rose-200 dark:border-rose-900/50 shadow-sm">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] font-black text-rose-700 dark:text-rose-400 uppercase tracking-widest">
+              Unpaid / Outstanding
+            </span>
+            <div className="w-8 h-8 rounded-xl bg-rose-100 dark:bg-rose-900/50 text-rose-600 flex items-center justify-center">
+              <AlertCircle size={16} />
+            </div>
+          </div>
+          <p className="text-2xl font-black text-rose-600 dark:text-rose-400">
+            {currencySymbol} {stats.totalUnpaid.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </p>
+          <p className="text-[11px] font-bold text-rose-600/80 dark:text-rose-400 mt-1">
+            {stats.unpaidCount} unpaid ({stats.overdueCount} overdue: {currencySymbol} {stats.totalOverdue.toLocaleString(undefined, { maximumFractionDigits: 0 })})
+          </p>
+        </div>
+
+        {statementType === 'invoices' ? (
+          <div className="bg-purple-50/70 dark:bg-purple-950/20 p-5 rounded-3xl border border-purple-200 dark:border-purple-900/50 shadow-sm">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] font-black text-purple-700 dark:text-purple-400 uppercase tracking-widest">
+                Proforma Pipeline
+              </span>
+              <div className="w-8 h-8 rounded-xl bg-purple-100 dark:bg-purple-900/50 text-purple-600 flex items-center justify-center">
+                <Clock size={16} />
+              </div>
+            </div>
+            <p className="text-2xl font-black text-purple-700 dark:text-purple-300">
+              {currencySymbol} {stats.totalProforma.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </p>
+            <p className="text-[11px] font-bold text-purple-600/80 dark:text-purple-400 mt-1">
+              {stats.proformaCount} active Proforma Invoices
+            </p>
+          </div>
+        ) : (
+          <div className="bg-amber-50/70 dark:bg-amber-950/20 p-5 rounded-3xl border border-amber-200 dark:border-amber-900/50 shadow-sm">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] font-black text-amber-700 dark:text-amber-400 uppercase tracking-widest">
+                Filtered Expenses & Net
+              </span>
+              <div className="w-8 h-8 rounded-xl bg-amber-100 dark:bg-amber-900/50 text-amber-600 flex items-center justify-center">
+                <Wallet size={16} />
+              </div>
+            </div>
+            <p className="text-2xl font-black text-amber-700 dark:text-amber-400">
+              {currencySymbol} {stats.totalExpenses.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </p>
+            <p className="text-[11px] font-bold text-amber-700/80 dark:text-amber-400 mt-1">
+              {stats.expenseCount} expenses • Net Cash: {currencySymbol} {stats.netCashflow.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* VIEW 1: MONTH-WISE SUMMARY TABLE (Always shown when groupingMode === 'month_wise') */}
+      {groupingMode === 'month_wise' && (
+        <div className="no-print bg-white dark:bg-darkcard rounded-3xl border border-slate-200 dark:border-darkborder shadow-sm overflow-hidden">
+          <div className="p-6 border-b border-slate-100 dark:border-darkborder flex items-center justify-between">
+            <div>
+              <h3 className="text-base font-black text-slate-900 dark:text-white flex items-center gap-2">
+                <CalendarDays size={18} className="text-indigo-600" />
+                <span>Month-Wise Financial Statement Breakdown</span>
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Monthly aggregation of billed amounts, paid collections, unpaid receivables, and expenses.
+              </p>
+            </div>
+            <span className="px-3 py-1 rounded-full bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-300 text-xs font-black">
+              {monthWiseSummary.length} Active Months
+            </span>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-slate-50 dark:bg-slate-800/80 text-slate-400 text-[10px] font-black uppercase tracking-wider">
+                  <th className="px-6 py-4">Month / Year</th>
+                  <th className="px-6 py-4 text-center">Invoices</th>
+                  <th className="px-6 py-4 text-right">Total Billed</th>
+                  <th className="px-6 py-4 text-right text-emerald-600">Paid / Settled</th>
+                  <th className="px-6 py-4 text-right text-rose-600">Unpaid Balance</th>
+                  {statementType !== 'invoices' && (
+                    <th className="px-6 py-4 text-right text-amber-600">Expenses</th>
+                  )}
+                  <th className="px-6 py-4 text-right">Collection %</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-darkborder text-sm">
+                {monthWiseSummary.map(row => {
+                  const pct = row.invoiced > 0 ? Math.round((row.paid / row.invoiced) * 100) : 0;
+                  return (
+                    <tr key={row.monthKey} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors">
+                      <td className="px-6 py-4 font-black text-slate-900 dark:text-white">
+                        {row.label}
+                      </td>
+                      <td className="px-6 py-4 text-center font-bold text-slate-600 dark:text-slate-300">
+                        {row.invoiceCount}
+                      </td>
+                      <td className="px-6 py-4 text-right font-black text-slate-900 dark:text-white">
+                        {currencySymbol} {row.invoiced.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                      <td className="px-6 py-4 text-right font-black text-emerald-600">
+                        {currencySymbol} {row.paid.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                      <td className="px-6 py-4 text-right font-black text-rose-600">
+                        {currencySymbol} {row.unpaid.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                      {statementType !== 'invoices' && (
+                        <td className="px-6 py-4 text-right font-black text-amber-600">
+                          {currencySymbol} {row.expenses.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                      )}
+                      <td className="px-6 py-4 text-right">
+                        <div className="inline-flex items-center space-x-2">
+                          <div className="w-16 h-2 bg-slate-100 dark:bg-slate-700 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-emerald-500 rounded-full"
+                              style={{ width: `${pct}%` }}
+                            />
+                          </div>
+                          <span className="text-xs font-black text-slate-700 dark:text-slate-300">{pct}%</span>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {monthWiseSummary.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="px-6 py-12 text-center text-slate-400 font-bold">
+                      No monthly records match the selected filters.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* VIEW 2: CATEGORY-WISE BREAKDOWN TABLE */}
+      {groupingMode === 'category_wise' && (
+        <div className="no-print bg-white dark:bg-darkcard rounded-3xl border border-slate-200 dark:border-darkborder shadow-sm overflow-hidden">
+          <div className="p-6 border-b border-slate-100 dark:border-darkborder flex items-center justify-between">
+            <div>
+              <h3 className="text-base font-black text-slate-900 dark:text-white flex items-center gap-2">
+                <PieChart size={18} className="text-purple-600" />
+                <span>Category-Based Financial Breakdown (Paid vs. Unpaid)</span>
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Granular breakdown of billed services and expense categories with settled vs. pending totals.
+              </p>
+            </div>
+            <span className="px-3 py-1 rounded-full bg-purple-50 dark:bg-purple-950 text-purple-600 dark:text-purple-300 text-xs font-black">
+              {categoryWiseSummary.length} Categories
+            </span>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-slate-50 dark:bg-slate-800/80 text-slate-400 text-[10px] font-black uppercase tracking-wider">
+                  <th className="px-6 py-4">Category Name</th>
+                  <th className="px-6 py-4">Type</th>
+                  <th className="px-6 py-4 text-center">Entries</th>
+                  <th className="px-6 py-4 text-right text-emerald-600">Paid / Settled</th>
+                  <th className="px-6 py-4 text-right text-rose-600">Unpaid / Pending</th>
+                  <th className="px-6 py-4 text-right">Total Category Volume</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-darkborder text-sm">
+                {categoryWiseSummary.map((row, idx) => (
+                  <tr
+                    key={`${row.category}_${idx}`}
+                    onClick={() => toggleCategorySelection(row.category)}
+                    className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors cursor-pointer"
+                  >
+                    <td className="px-6 py-4 font-black text-slate-900 dark:text-white flex items-center space-x-2">
+                      <Tag size={14} className="text-purple-500" />
+                      <span>{row.category}</span>
+                    </td>
+                    <td className="px-6 py-4">
+                      <span
+                        className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase ${
+                          row.type.includes('Revenue')
+                            ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300'
+                            : 'bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
+                        }`}
+                      >
+                        {row.type}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-center font-bold text-slate-600 dark:text-slate-300">
+                      {row.count}
+                    </td>
+                    <td className="px-6 py-4 text-right font-black text-emerald-600">
+                      {currencySymbol} {row.paidAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </td>
+                    <td className="px-6 py-4 text-right font-black text-rose-600">
+                      {currencySymbol} {row.unpaidAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </td>
+                    <td className="px-6 py-4 text-right font-black text-slate-900 dark:text-white">
+                      {currencySymbol} {row.totalAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </td>
+                  </tr>
+                ))}
+                {categoryWiseSummary.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="px-6 py-12 text-center text-slate-400 font-bold">
+                      No categories match the current filter selection.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* VIEW 3: PAID VS UNPAID SPLIT VIEW */}
+      {groupingMode === 'paid_unpaid_split' && (
+        <div className="no-print grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Unpaid / Pending Column */}
+          <div className="bg-white dark:bg-darkcard rounded-3xl border border-rose-200 dark:border-rose-900/50 shadow-sm overflow-hidden">
+            <div className="p-5 bg-rose-50/60 dark:bg-rose-950/30 border-b border-rose-100 dark:border-rose-900/40 flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <AlertCircle size={18} className="text-rose-600" />
+                <h3 className="text-sm font-black text-rose-950 dark:text-rose-200 uppercase tracking-wider">
+                  Unpaid & Pending Invoices ({stats.unpaidCount})
+                </h3>
+              </div>
+              <span className="text-sm font-black text-rose-600 dark:text-rose-400">
+                {currencySymbol} {stats.totalUnpaid.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+              </span>
+            </div>
+            <div className="divide-y divide-slate-100 dark:divide-darkborder max-h-[500px] overflow-y-auto">
+              {filteredInvoices
+                .filter(i => i.status !== InvoiceStatus.PAID && i.status !== InvoiceStatus.PROFORMA)
+                .map(inv => {
+                  const m = calculateInvoiceMetrics(inv, selectedCategories);
+                  const c = clients.find(cl => cl.id === inv.clientId);
+                  return (
+                    <div
+                      key={inv.id}
+                      onClick={() => onSelectInvoice && onSelectInvoice(inv.id)}
+                      className="p-4 hover:bg-slate-50 dark:hover:bg-slate-800/40 flex items-center justify-between cursor-pointer transition-colors"
+                    >
+                      <div>
+                        <div className="flex items-center space-x-2">
+                          <span className="font-black text-slate-900 dark:text-white text-sm">#{inv.id}</span>
+                          <span className="text-xs font-bold text-slate-500">• {c?.company || c?.name}</span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 mt-0.5">
+                          Date: {formatDate(inv.date)} | Due: {formatDate(inv.dueDate)} | {m.allCategories.join(', ')}
+                        </p>
+                      </div>
+                      <div className="text-right flex items-center space-x-3">
+                        <div>
+                          <p className="font-black text-rose-600 text-sm">
+                            {currencySymbol} {m.total.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                          </p>
+                          <span className="text-[10px] font-black uppercase text-rose-500">{inv.status}</span>
+                        </div>
+                        {onUpdateInvoice && (
+                          <button
+                            onClick={e => handleQuickMarkPaid(inv, e)}
+                            title="Mark as Paid"
+                            className="px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-600 text-emerald-700 hover:text-white text-[10px] font-black transition-all"
+                          >
+                            Mark Paid
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              {stats.unpaidCount === 0 && (
+                <div className="p-10 text-center text-slate-400 text-xs font-bold">
+                  All filtered invoices are settled!
                 </div>
+              )}
+            </div>
+          </div>
+
+          {/* Paid / Settled Column */}
+          <div className="bg-white dark:bg-darkcard rounded-3xl border border-emerald-200 dark:border-emerald-900/50 shadow-sm overflow-hidden">
+            <div className="p-5 bg-emerald-50/60 dark:bg-emerald-950/30 border-b border-emerald-100 dark:border-emerald-900/40 flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <CheckCircle2 size={18} className="text-emerald-600" />
+                <h3 className="text-sm font-black text-emerald-950 dark:text-emerald-200 uppercase tracking-wider">
+                  Paid & Settled Invoices ({stats.paidCount})
+                </h3>
+              </div>
+              <span className="text-sm font-black text-emerald-600 dark:text-emerald-400">
+                {currencySymbol} {stats.totalPaid.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+              </span>
+            </div>
+            <div className="divide-y divide-slate-100 dark:divide-darkborder max-h-[500px] overflow-y-auto">
+              {filteredInvoices
+                .filter(i => i.status === InvoiceStatus.PAID)
+                .map(inv => {
+                  const m = calculateInvoiceMetrics(inv, selectedCategories);
+                  const c = clients.find(cl => cl.id === inv.clientId);
+                  return (
+                    <div
+                      key={inv.id}
+                      onClick={() => onSelectInvoice && onSelectInvoice(inv.id)}
+                      className="p-4 hover:bg-slate-50 dark:hover:bg-slate-800/40 flex items-center justify-between cursor-pointer transition-colors"
+                    >
+                      <div>
+                        <div className="flex items-center space-x-2">
+                          <span className="font-black text-slate-900 dark:text-white text-sm">#{inv.id}</span>
+                          <span className="text-xs font-bold text-slate-500">• {c?.company || c?.name}</span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 mt-0.5">
+                          Date: {formatDate(inv.date)} | Paid via {inv.paymentMethod || 'Bank Transfer'} | {m.allCategories.join(', ')}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="font-black text-emerald-600 text-sm">
+                          {currencySymbol} {m.total.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                        </p>
+                        <span className="text-[10px] font-black uppercase text-emerald-600">Settled</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              {stats.paidCount === 0 && (
+                <div className="p-10 text-center text-slate-400 text-xs font-bold">
+                  No paid invoices match the current filter criteria.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DETAILED TRANSACTION LEDGER TABLE */}
+      <div className="no-print bg-white dark:bg-darkcard rounded-3xl border border-slate-200 dark:border-darkborder shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-slate-100 dark:border-darkborder flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center space-x-3">
+            <div className="p-2.5 bg-indigo-50 dark:bg-indigo-950 text-indigo-600 rounded-xl">
+              <Layers size={18} />
+            </div>
+            <div>
+              <h3 className="text-base font-black text-slate-900 dark:text-white">
+                Detailed Statement Ledger ({filteredInvoices.length + filteredExpenses.length} Records)
+              </h3>
+              <p className="text-xs text-slate-500 font-medium">
+                Showing {selectedClient ? selectedClient.company || selectedClient.name : 'All Clients'} • Period: {activePeriodLabel}
+              </p>
+            </div>
+          </div>
+
+          {stats.isFullySettled && selectedClient && (
+            <button
+              onClick={() => setShowCertificateModal(true)}
+              className="flex items-center space-x-2 px-4 py-2 bg-emerald-600 text-white rounded-xl font-black text-xs hover:bg-emerald-700 transition-all shadow-sm"
+            >
+              <ShieldCheck size={15} />
+              <span>Issue Clearance Certificate</span>
+            </button>
+          )}
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse">
+            <thead>
+              <tr className="bg-slate-50/80 dark:bg-slate-800/80 text-slate-400 text-[10px] font-black uppercase tracking-wider">
+                <th className="px-6 py-4">Document / Ref</th>
+                <th className="px-6 py-4">Client / Vendor</th>
+                <th className="px-6 py-4">Issue Date</th>
+                <th className="px-6 py-4">Categories & Line Items</th>
+                <th className="px-6 py-4">Status</th>
+                <th className="px-6 py-4 text-right">Billed / Expense</th>
+                <th className="px-6 py-4 text-right text-emerald-600">Paid Amount</th>
+                <th className="px-6 py-4 text-right text-rose-600">Unpaid Balance</th>
+                <th className="px-6 py-4 text-right">Action</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-darkborder text-sm">
+              {filteredInvoices.map(inv => {
+                const m = calculateInvoiceMetrics(inv, selectedCategories);
+                const c = clients.find(cl => cl.id === inv.clientId);
+                const isPaid = inv.status === InvoiceStatus.PAID;
+                const isProforma = inv.status === InvoiceStatus.PROFORMA;
+                const overdue = isEffectiveOverdue(inv);
+
+                return (
+                  <tr
+                    key={inv.id}
+                    onClick={() => onSelectInvoice && onSelectInvoice(inv.id)}
+                    className="group hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors cursor-pointer"
+                  >
+                    <td className="px-6 py-4">
+                      <div className="flex items-center space-x-2">
+                        <span className="font-black text-slate-900 dark:text-white group-hover:text-indigo-600 transition-colors">
+                          #{inv.id}
+                        </span>
+                        <ExternalLink size={12} className="text-slate-300 opacity-0 group-hover:opacity-100 transition-all" />
+                      </div>
+                      <span className="text-[10px] font-bold text-slate-400">
+                        Due: {formatDate(inv.dueDate)}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4">
+                      <p className="font-bold text-slate-800 dark:text-slate-200 text-xs">
+                        {c?.company || c?.name || 'Direct Client'}
+                      </p>
+                      {inv.paymentMethod && (
+                        <span className="text-[10px] text-slate-400 font-medium">
+                          {inv.paymentMethod}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4 font-bold text-slate-600 dark:text-slate-300 text-xs whitespace-nowrap">
+                      {formatDate(inv.date)}
+                    </td>
+                    <td className="px-6 py-4 max-w-xs">
+                      <div className="flex flex-wrap gap-1 mb-1">
+                        {m.allCategories.map(cat => (
+                          <span
+                            key={cat}
+                            className="px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/70 text-indigo-600 dark:text-indigo-300 text-[10px] font-black"
+                          >
+                            {cat}
+                          </span>
+                        ))}
+                      </div>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
+                        {m.matchingItems.map(i => i.description || i.service).join(', ')}
+                      </p>
+                    </td>
+                    <td className="px-6 py-4">
+                      <span
+                        className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                          isPaid
+                            ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+                            : isProforma
+                            ? 'bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300'
+                            : overdue
+                            ? 'bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300'
+                            : 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
+                        }`}
+                      >
+                        <span>{overdue && !isPaid && !isProforma ? 'Overdue' : inv.status}</span>
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-right font-black text-slate-900 dark:text-white whitespace-nowrap">
+                      {currencySymbol} {m.total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </td>
+                    <td className="px-6 py-4 text-right font-black text-emerald-600 whitespace-nowrap">
+                      {isPaid
+                        ? `${currencySymbol} ${m.total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                        : '-'}
+                    </td>
+                    <td className="px-6 py-4 text-right font-black text-rose-600 whitespace-nowrap">
+                      {!isPaid && !isProforma
+                        ? `${currencySymbol} ${m.total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                        : '-'}
+                    </td>
+                    <td className="px-6 py-4 text-right whitespace-nowrap" onClick={e => e.stopPropagation()}>
+                      {!isPaid && !isProforma && onUpdateInvoice ? (
+                        <button
+                          onClick={e => handleQuickMarkPaid(inv, e)}
+                          className="px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-600 text-emerald-700 hover:text-white text-[11px] font-black transition-all"
+                        >
+                          Mark Paid
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => onSelectInvoice && onSelectInvoice(inv.id)}
+                          className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-[11px] font-bold hover:bg-indigo-600 hover:text-white transition-all"
+                        >
+                          Open
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+
+              {/* Expense Rows when statementType is expenses or combined */}
+              {filteredExpenses.map(exp => (
+                <tr key={exp.id} className="bg-amber-50/20 dark:bg-amber-950/10 hover:bg-amber-50/40 transition-colors">
+                  <td className="px-6 py-4">
+                    <span className="font-black text-amber-800 dark:text-amber-300 text-xs">
+                      EXP #{exp.receiptNumber || exp.id.slice(-6)}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 font-bold text-slate-700 dark:text-slate-300 text-xs">
+                    {exp.vendor || 'Expense Vendor'}
+                  </td>
+                  <td className="px-6 py-4 font-bold text-slate-600 dark:text-slate-300 text-xs">
+                    {formatDate(exp.date)}
+                  </td>
+                  <td className="px-6 py-4">
+                    <span className="px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 text-[10px] font-black mr-2">
+                      {exp.category}
+                    </span>
+                    <span className="text-xs text-slate-600 dark:text-slate-400">{exp.description}</span>
+                  </td>
+                  <td className="px-6 py-4">
+                    <span className="px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 text-[10px] font-black uppercase">
+                      Expense Paid
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 text-right font-black text-amber-700 dark:text-amber-400">
+                    -{currencySymbol} {exp.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </td>
+                  <td className="px-6 py-4 text-right font-bold text-amber-700">
+                    {currencySymbol} {exp.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </td>
+                  <td className="px-6 py-4 text-right text-slate-400">-</td>
+                  <td className="px-6 py-4 text-right text-xs text-slate-400 font-bold">
+                    {exp.paymentMethod || 'Cash'}
+                  </td>
+                </tr>
+              ))}
+
+              {filteredInvoices.length === 0 && filteredExpenses.length === 0 && (
+                <tr>
+                  <td colSpan={9} className="px-6 py-16 text-center">
+                    <Filter size={32} className="mx-auto text-slate-300 mb-2" />
+                    <p className="text-slate-500 font-bold text-sm">
+                      No statement records found for the selected Date, Status, or Category filters.
+                    </p>
+                    <button
+                      onClick={handleResetFilters}
+                      className="mt-3 px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-black"
+                    >
+                      Reset All Statement Filters
+                    </button>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+            {(filteredInvoices.length > 0 || filteredExpenses.length > 0) && (
+              <tfoot className="bg-slate-900 text-white font-black text-sm">
+                <tr>
+                  <td colSpan={5} className="px-6 py-4 text-right uppercase tracking-wider text-xs text-slate-400">
+                    Filtered Statement Totals ({activePeriodLabel}):
+                  </td>
+                  <td className="px-6 py-4 text-right whitespace-nowrap">
+                    {currencySymbol} {stats.totalInvoiced.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </td>
+                  <td className="px-6 py-4 text-right text-emerald-400 whitespace-nowrap">
+                    {currencySymbol} {stats.totalPaid.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </td>
+                  <td className="px-6 py-4 text-right text-rose-400 whitespace-nowrap">
+                    {currencySymbol} {stats.totalUnpaid.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </td>
+                  <td className="px-6 py-4"></td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+      </div>
+
+      {/* PRINTABLE / PDF CUSTOMIZED STATEMENT MODAL */}
+      {showPrintModal && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-50 flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl w-full max-w-5xl shadow-2xl overflow-hidden my-auto animate-in zoom-in-95 duration-200 flex flex-col max-h-[95vh]">
+            <div className="no-print p-4 sm:p-6 bg-slate-900 text-white flex flex-wrap items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center space-x-3">
+                <Printer className="text-indigo-400" size={20} />
                 <div>
-                  <h3 className="text-base font-black">Official Statement of Account & Settlement</h3>
-                  <p className="text-xs text-slate-400 font-medium">Ready for PDF download or print</p>
+                  <span className="font-bold text-sm block">Customized A4 Statement Preview</span>
+                  <span className="text-[11px] text-slate-400">
+                    Period: {activePeriodLabel} • Status: {statusFilter.toUpperCase()} • Categories: {selectedCategories.length ? selectedCategories.join(', ') : 'All'}
+                  </span>
                 </div>
               </div>
-              <div className="flex items-center space-x-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
-                  onClick={handleDownloadSettlementPDF}
-                  disabled={isExportingPdf}
-                  className="bg-emerald-600 text-white px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider flex items-center space-x-1.5 hover:bg-emerald-700 shadow-md transition-all disabled:opacity-50"
+                  onClick={() =>
+                    downloadElementAsPdf(
+                      'printable-statement-area',
+                      `Statement_${selectedClient ? selectedClient.company : 'Consolidated'}_${new Date().toISOString().split('T')[0]}.pdf`
+                    )
+                  }
+                  className="bg-indigo-600 text-white px-5 py-2 rounded-xl font-black text-xs hover:bg-indigo-700 transition-all flex items-center space-x-2"
                 >
-                  {isExportingPdf ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
-                  <span>Save PDF</span>
+                  <Download size={15} />
+                  <span>Download PDF</span>
                 </button>
                 <button
-                  onClick={handlePrintStatement}
-                  className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider flex items-center space-x-1.5 hover:bg-indigo-700 shadow-md"
+                  onClick={() =>
+                    printElementDirectly(
+                      'printable-statement-area',
+                      `Statement_${selectedClient ? selectedClient.company : 'Consolidated'}`
+                    )
+                  }
+                  className="bg-emerald-600 text-white px-5 py-2 rounded-xl font-black text-xs hover:bg-emerald-700 transition-all flex items-center space-x-2"
                 >
-                  <Printer size={14} />
-                  <span>Print</span>
+                  <Printer size={15} />
+                  <span>Print Now</span>
+                </button>
+                <button
+                  onClick={() =>
+                    downloadDocumentAsHtml(
+                      'printable-statement-area',
+                      `Statement_${selectedClient ? selectedClient.company : 'Consolidated'}.html`,
+                      customStatementTitle
+                    )
+                  }
+                  className="bg-slate-700 text-white px-4 py-2 rounded-xl font-bold text-xs hover:bg-slate-600 transition-all flex items-center space-x-1.5"
+                >
+                  <FileText size={14} />
+                  <span>Save HTML</span>
                 </button>
                 <button
                   onClick={() => setShowPrintModal(false)}
-                  className="p-2 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800"
+                  className="p-2 text-slate-400 hover:text-white transition-colors"
                 >
-                  <X size={18} />
+                  <X size={22} />
                 </button>
               </div>
             </div>
 
-            {/* Printable Document Body Preview */}
-            <div className="p-8 overflow-y-auto custom-scrollbar bg-slate-100 dark:bg-slate-950 flex justify-center">
-              <div id="statement-sheet" className="bg-white p-10 rounded-2xl shadow-md max-w-3xl w-full border border-slate-200 text-slate-800 space-y-8 print-container">
-                {/* Statement Header */}
-                <div className="flex justify-between items-start border-b-2 border-slate-900 pb-6">
-                  <div className="flex items-start space-x-4">
-                    {settings?.logoUrl ? (
-                      <div className="w-16 h-16 rounded-2xl bg-white border border-slate-200 p-1.5 flex items-center justify-center shadow-md overflow-hidden flex-shrink-0">
-                        <img 
-                          src={settings.logoUrl} 
-                          alt={settings.name || 'Company Logo'} 
-                          className="max-h-full max-w-full object-contain"
+            <div className="p-4 sm:p-8 overflow-y-auto bg-slate-100 flex-1 flex justify-center">
+              <div
+                id="printable-statement-area"
+                className="bg-white text-slate-900 shadow-xl box-border flex flex-col justify-between"
+                style={{ width: '210mm', minHeight: '297mm', padding: '14mm 16mm' }}
+              >
+                <div>
+                  {/* Statement Header */}
+                  <div className="flex justify-between items-start border-b-2 border-slate-900 pb-5 mb-5">
+                    <div className="flex items-center space-x-4">
+                      {settings?.logoUrl ? (
+                        <img
+                          src={settings.logoUrl}
+                          alt={settings.name}
+                          className="h-14 w-auto object-contain"
                           referrerPolicy="no-referrer"
-                          onError={(e) => {
-                            (e.target as HTMLElement).style.display = 'none';
-                          }}
                         />
+                      ) : (
+                        <div className="w-12 h-12 bg-slate-900 rounded-xl flex items-center justify-center text-white font-black text-xl">
+                          Af
+                        </div>
+                      )}
+                      <div>
+                        <h2 className="text-lg font-black uppercase tracking-tight text-slate-900">
+                          {settings?.name || 'Af© ACCOUNTS'}
+                        </h2>
+                        <p className="text-[10px] font-bold text-slate-500 whitespace-pre-line">
+                          {settings?.address || 'Dubai Media City, Dubai, UAE'}
+                        </p>
+                        <p className="text-[10px] font-black text-indigo-600 mt-0.5">
+                          TRN: {settings?.vatNumber || '100234567890003'} | {settings?.email} | {settings?.phone}
+                        </p>
                       </div>
-                    ) : (
-                      <div className="w-16 h-16 rounded-2xl bg-slate-900 flex items-center justify-center text-white text-xl font-black shadow-md flex-shrink-0">
-                        {settings?.name ? settings.name.split(' ').map(w => w[0]).filter(Boolean).slice(0, 2).join('').toUpperCase() || 'AC' : 'AC'}
+                    </div>
+
+                    <div className="text-right">
+                      <h1 className="text-xl font-black uppercase tracking-tight text-slate-900">
+                        {customStatementTitle || 'STATEMENT OF ACCOUNT'}
+                      </h1>
+                      <p className="text-[10px] font-black text-indigo-600 uppercase tracking-widest mt-1">
+                        Period: {activePeriodLabel}
+                      </p>
+                      <p className="text-[10px] font-bold text-slate-500 mt-0.5">
+                        Generated: {formatDate(new Date().toISOString().split('T')[0])}
+                      </p>
+                      <div className="mt-1.5 inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded bg-slate-100 text-[9px] font-black uppercase text-slate-700">
+                        <span>Status: {statusFilter.toUpperCase()}</span>
+                        {selectedCategories.length > 0 && (
+                          <span>• Category: {selectedCategories.join(', ')}</span>
+                        )}
                       </div>
-                    )}
-                    <div>
-                      <h1 className="text-2xl font-black tracking-tight text-slate-900">{settings?.name || 'Accounts & Invoicing'}</h1>
-                      <p className="text-xs text-slate-500 font-medium mt-1">{settings?.address || 'Company Address'}</p>
-                      {settings?.email && <p className="text-xs text-slate-500 font-medium">Email: {settings.email}</p>}
-                      {settings?.trnNumber && <p className="text-xs font-bold text-indigo-600 mt-1">TRN (Tax Reg): {settings.trnNumber}</p>}
                     </div>
                   </div>
-                  <div className="text-right">
-                    <span className="bg-slate-900 text-white text-xs font-black uppercase tracking-widest px-4 py-1.5 rounded-lg inline-flex items-center justify-center text-center">
-                      Statement of Account
-                    </span>
-                    <p className="text-xs font-bold text-slate-500 mt-2">Date: {new Date().toLocaleDateString('en-GB')}</p>
-                    <p className="text-xs font-bold text-slate-500">Currency: {settings?.defaultCurrency || 'AED'}</p>
-                  </div>
-                </div>
 
-                {/* Client Box & Period */}
-                <div className="grid grid-cols-2 gap-6 bg-slate-50 p-5 rounded-xl border border-slate-200">
+                  {/* Account To & Financial Summary Box */}
+                  <div className="grid grid-cols-2 gap-6 mb-6">
+                    <div className="p-4 rounded-xl bg-slate-50 border border-slate-200">
+                      <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">
+                        Statement Prepared For
+                      </p>
+                      {selectedClient ? (
+                        <>
+                          <p className="text-sm font-black text-slate-900">{selectedClient.company}</p>
+                          <p className="text-xs font-bold text-slate-600">{selectedClient.name}</p>
+                          <p className="text-[10px] text-slate-500 mt-1">{selectedClient.address}</p>
+                          <p className="text-[10px] text-slate-600 font-bold mt-1">
+                            {selectedClient.email} {selectedClient.phone ? `• ${selectedClient.phone}` : ''}
+                          </p>
+                          {selectedClient.trn && (
+                            <p className="text-[10px] font-black text-indigo-600 mt-0.5">
+                              Client TRN: {selectedClient.trn}
+                            </p>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <p className="text-sm font-black text-slate-900">
+                            Consolidated Multi-Client Statement
+                          </p>
+                          <p className="text-xs font-bold text-slate-600 mt-0.5">
+                            Includes {clients.length} Registered Client Accounts
+                          </p>
+                          <p className="text-[10px] text-slate-500 mt-1">
+                            Filtered by: {activePeriodLabel} ({statusFilter.toUpperCase()})
+                          </p>
+                        </>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 flex flex-col justify-between">
+                        <span className="text-[8px] font-black uppercase text-slate-400">Total Billed</span>
+                        <span className="text-xs font-black text-slate-900">
+                          {currencySymbol} {stats.totalInvoiced.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
+                      </div>
+                      <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 flex flex-col justify-between">
+                        <span className="text-[8px] font-black uppercase text-emerald-700">Paid / Settled</span>
+                        <span className="text-xs font-black text-emerald-700">
+                          {currencySymbol} {stats.totalPaid.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
+                      </div>
+                      <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 flex flex-col justify-between">
+                        <span className="text-[8px] font-black uppercase text-rose-700">Unpaid Balance</span>
+                        <span className="text-xs font-black text-rose-700">
+                          {currencySymbol} {stats.totalUnpaid.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Optional Month-Wise Summary in PDF */}
+                  {showMonthSummaryInPdf && monthWiseSummary.length > 0 && (
+                    <div className="mb-6">
+                      <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">
+                        Month-Wise Statement Summary
+                      </h4>
+                      <table className="w-full text-left border-collapse border border-slate-200 text-[10px]">
+                        <thead>
+                          <tr className="bg-slate-100 text-slate-700 font-black uppercase">
+                            <th className="py-1.5 px-3 border-b border-slate-200">Month</th>
+                            <th className="py-1.5 px-3 border-b border-slate-200 text-center">Invoices</th>
+                            <th className="py-1.5 px-3 border-b border-slate-200 text-right">Billed ({currencySymbol})</th>
+                            <th className="py-1.5 px-3 border-b border-slate-200 text-right text-emerald-700">Paid ({currencySymbol})</th>
+                            <th className="py-1.5 px-3 border-b border-slate-200 text-right text-rose-700">Unpaid ({currencySymbol})</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200">
+                          {monthWiseSummary.map(m => (
+                            <tr key={m.monthKey}>
+                              <td className="py-1.5 px-3 font-bold">{m.label}</td>
+                              <td className="py-1.5 px-3 text-center">{m.invoiceCount}</td>
+                              <td className="py-1.5 px-3 text-right font-bold">{m.invoiced.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                              <td className="py-1.5 px-3 text-right font-bold text-emerald-700">{m.paid.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                              <td className="py-1.5 px-3 text-right font-bold text-rose-700">{m.unpaid.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* Optional Category-Wise Summary in PDF */}
+                  {showCategorySummaryInPdf && categoryWiseSummary.length > 0 && (
+                    <div className="mb-6">
+                      <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">
+                        Category-Based Summary (Paid vs. Unpaid)
+                      </h4>
+                      <table className="w-full text-left border-collapse border border-slate-200 text-[10px]">
+                        <thead>
+                          <tr className="bg-slate-100 text-slate-700 font-black uppercase">
+                            <th className="py-1.5 px-3 border-b border-slate-200">Category</th>
+                            <th className="py-1.5 px-3 border-b border-slate-200 text-center">Items</th>
+                            <th className="py-1.5 px-3 border-b border-slate-200 text-right text-emerald-700">Paid ({currencySymbol})</th>
+                            <th className="py-1.5 px-3 border-b border-slate-200 text-right text-rose-700">Unpaid ({currencySymbol})</th>
+                            <th className="py-1.5 px-3 border-b border-slate-200 text-right">Total ({currencySymbol})</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200">
+                          {categoryWiseSummary.map((cat, i) => (
+                            <tr key={i}>
+                              <td className="py-1.5 px-3 font-bold">{cat.category}</td>
+                              <td className="py-1.5 px-3 text-center">{cat.count}</td>
+                              <td className="py-1.5 px-3 text-right font-bold text-emerald-700">{cat.paidAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                              <td className="py-1.5 px-3 text-right font-bold text-rose-700">{cat.unpaidAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                              <td className="py-1.5 px-3 text-right font-black">{cat.totalAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* Detailed Chronological Statement Table */}
                   <div>
-                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1">Statement Issued To:</span>
-                    <h3 className="text-base font-black text-slate-900">{client?.company}</h3>
-                    <p className="text-xs text-slate-600 mt-0.5">{client?.name}</p>
-                    <p className="text-xs text-slate-600">{client?.address}</p>
-                    {client?.trn && <p className="text-xs font-bold text-indigo-600 mt-1">Client TRN: {client.trn}</p>}
-                  </div>
-                  <div className="space-y-1.5 text-xs text-right">
-                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1">Financial Summary:</span>
-                    <div className="flex justify-between"><span className="text-slate-500 font-medium">Total Billed:</span> <span className="font-black text-slate-900">AED {stats.totalInvoiced.toLocaleString()}</span></div>
-                    <div className="flex justify-between"><span className="text-slate-500 font-medium">Total Settled:</span> <span className="font-black text-emerald-600">AED {stats.totalPaid.toLocaleString()}</span></div>
-                    <div className="flex justify-between pt-1 border-t border-slate-200"><span className="text-slate-700 font-bold">Outstanding Balance:</span> <span className="font-black text-rose-600 text-sm">AED {stats.balance.toLocaleString()}</span></div>
-                  </div>
-                </div>
-
-                {/* Itemized Table */}
-                <table className="w-full text-left text-xs border-collapse">
-                  <thead>
-                    <tr className="border-b-2 border-slate-900 font-black uppercase text-[10px] text-slate-500">
-                      <th className="py-2.5">Date</th>
-                      <th className="py-2.5">Invoice #</th>
-                      <th className="py-2.5">Description</th>
-                      <th className="py-2.5 text-center">Status</th>
-                      <th className="py-2.5 text-right">Amount (AED)</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-200 font-medium">
-                    {clientInvoices.map(inv => {
-                      const total = calculateInvoiceTotal(inv);
-                      return (
-                        <tr key={inv.id}>
-                          <td className="py-2.5 font-bold">{formatDate(inv.date)}</td>
-                          <td className="py-2.5 font-black text-slate-900">{inv.id}</td>
-                          <td className="py-2.5 text-slate-600 truncate max-w-xs">{inv.items.map(i => i.description).join(', ')}</td>
-                          <td className="py-2.5 text-center">
-                            <span className={`px-2 py-0.5 rounded font-black text-[10px] uppercase ${inv.status === InvoiceStatus.PAID ? 'text-emerald-700' : 'text-rose-700'}`}>
-                              {inv.status}
-                            </span>
-                          </td>
-                          <td className="py-2.5 text-right font-black text-slate-900">AED {total.toLocaleString()}</td>
+                    <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">
+                      Itemized Statement Ledger
+                    </h4>
+                    <table className="w-full text-left border-collapse text-[10px]">
+                      <thead>
+                        <tr className="bg-slate-900 text-white font-black uppercase">
+                          <th className="py-2 px-2.5">Date</th>
+                          <th className="py-2 px-2.5">Invoice #</th>
+                          {selectedClientId === 'ALL' && <th className="py-2 px-2.5">Client</th>}
+                          {showLineItemDetailsInPdf && <th className="py-2 px-2.5">Category & Description</th>}
+                          <th className="py-2 px-2.5 text-center">Status</th>
+                          <th className="py-2 px-2.5 text-right">Billed</th>
+                          <th className="py-2 px-2.5 text-right">Paid</th>
+                          <th className="py-2 px-2.5 text-right">Unpaid</th>
+                          {showRunningBalanceInPdf && <th className="py-2 px-2.5 text-right">Running Bal.</th>}
                         </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200">
+                        {filteredInvoices.map(inv => {
+                          const m = calculateInvoiceMetrics(inv, selectedCategories);
+                          const c = clients.find(cl => cl.id === inv.clientId);
+                          const isPaid = inv.status === InvoiceStatus.PAID;
+                          const runBal = ledgerWithRunningBalance.get(inv.id) || 0;
 
-                {/* Settlement & Banking Instructions */}
-                <div className="border-t-2 border-slate-900 pt-6 grid grid-cols-2 gap-6 text-xs">
-                  <div>
-                    <h4 className="font-black text-slate-900 uppercase text-[10px] tracking-wider mb-1">Payment & Settlement Details</h4>
-                    {settings?.bankName && <p className="text-slate-600">Bank: <strong className="text-slate-800">{settings.bankName}</strong></p>}
-                    {settings?.bankAccount && <p className="text-slate-600">IBAN / Account: <strong className="font-mono text-slate-800">{settings.bankAccount}</strong></p>}
+                          return (
+                            <tr key={inv.id}>
+                              <td className="py-2 px-2.5 whitespace-nowrap font-medium">{formatDate(inv.date)}</td>
+                              <td className="py-2 px-2.5 font-black">#{inv.id}</td>
+                              {selectedClientId === 'ALL' && (
+                                <td className="py-2 px-2.5 font-bold">{c?.company || c?.name}</td>
+                              )}
+                              {showLineItemDetailsInPdf && (
+                                <td className="py-2 px-2.5 max-w-[200px] truncate">
+                                  <span className="font-bold text-indigo-700">[{m.allCategories.join(', ')}]</span>{' '}
+                                  {m.matchingItems.map(i => i.description || i.service).join('; ')}
+                                </td>
+                              )}
+                              <td className="py-2 px-2.5 text-center font-black uppercase">
+                                <span className={isPaid ? 'text-emerald-700' : 'text-rose-600'}>
+                                  {inv.status}
+                                </span>
+                              </td>
+                              <td className="py-2 px-2.5 text-right font-bold">
+                                {m.total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </td>
+                              <td className="py-2 px-2.5 text-right font-bold text-emerald-700">
+                                {isPaid ? m.total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
+                              </td>
+                              <td className="py-2 px-2.5 text-right font-bold text-rose-600">
+                                {!isPaid && inv.status !== InvoiceStatus.PROFORMA
+                                  ? m.total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                                  : '0.00'}
+                              </td>
+                              {showRunningBalanceInPdf && (
+                                <td className="py-2 px-2.5 text-right font-black text-slate-900">
+                                  {runBal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </td>
+                              )}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   </div>
-                  <div className="text-right flex flex-col justify-end">
-                    <div className="h-12 border-b border-slate-300 w-44 self-end"></div>
-                    <span className="text-[10px] font-bold text-slate-400 mt-1 uppercase">Authorized Signature & Stamp</span>
-                  </div>
+                </div>
+
+                {/* Statement Footer & Bank Details */}
+                <div className="pt-6 border-t-2 border-slate-900 mt-6">
+                  {showBankDetailsInPdf && (
+                    <div className="grid grid-cols-2 gap-6 mb-4">
+                      <div className="text-[10px] space-y-0.5">
+                        <p className="font-black uppercase text-slate-900 mb-1">Bank Remittance Details:</p>
+                        <p><strong>Bank:</strong> {settings?.bankName || 'Emirates NBD'}</p>
+                        <p><strong>Beneficiary:</strong> {settings?.beneficiaryName || settings?.name}</p>
+                        <p><strong>IBAN:</strong> {settings?.iban || 'AE000000000000000000000'}</p>
+                        <p><strong>Account #:</strong> {settings?.accountNumber || '-'}</p>
+                      </div>
+                      <div className="text-right flex flex-col justify-end items-end">
+                        <div className="p-3 rounded-xl bg-slate-900 text-white inline-block min-w-[200px]">
+                          <p className="text-[9px] font-bold uppercase text-slate-400">Net Balance Due</p>
+                          <p className="text-base font-black">
+                            {currencySymbol} {stats.totalUnpaid.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  <p className="text-[9px] font-bold text-slate-500 text-center">
+                    {customFooterNote}
+                  </p>
                 </div>
               </div>
             </div>
@@ -752,78 +2288,38 @@ export const Statements: React.FC<StatementsProps> = ({
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* SETTLEMENT CLEARANCE CERTIFICATE MODAL */}
-      {/* ========================================================================= */}
-      {showCertificateModal && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto no-print">
-          <div className="bg-white dark:bg-slate-900 rounded-[32px] max-w-2xl w-full flex flex-col shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden">
-            <div className="p-5 bg-slate-900 dark:bg-slate-950 text-white flex items-center justify-between border-b border-slate-800">
-              <div className="flex items-center space-x-2.5">
-                <ShieldCheck size={20} className="text-emerald-400" />
-                <h3 className="text-base font-black">Settlement Clearance Certificate</h3>
+      {/* CLEARANCE CERTIFICATE MODAL */}
+      {showCertificateModal && selectedClient && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-50 flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl w-full max-w-3xl shadow-2xl overflow-hidden my-8 animate-in zoom-in-95 duration-200">
+            <div className="no-print p-6 bg-emerald-600 text-white flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <ShieldCheck size={22} />
+                <span className="font-black text-sm">Financial Clearance Certificate</span>
               </div>
-              <button onClick={() => setShowCertificateModal(false)} className="p-2 text-slate-400 hover:text-white rounded-xl">
-                <X size={18} />
-              </button>
+              <div className="flex items-center space-x-3">
+                <button
+                  onClick={handleDownloadCertificatePdf}
+                  className="bg-white text-emerald-700 px-5 py-2 rounded-xl font-black text-xs hover:bg-emerald-50"
+                >
+                  Download PDF
+                </button>
+                <button onClick={() => setShowCertificateModal(false)} className="p-2 text-emerald-100 hover:text-white">
+                  <X size={20} />
+                </button>
+              </div>
             </div>
-
-            <div className="p-8 space-y-6 bg-slate-50 dark:bg-slate-950">
-              <div id="certificate-sheet" className="bg-white p-8 rounded-2xl border-2 border-slate-200 text-center space-y-4 shadow-sm text-slate-900">
-                <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto shadow-inner">
-                  <ShieldCheck size={32} />
-                </div>
-                <div>
-                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Financial Clearance Memo</span>
-                  <h2 className="text-2xl font-black text-slate-900 mt-1">Certificate of Account Settlement</h2>
-                </div>
-
-                <p className="text-xs text-slate-600 leading-relaxed max-w-md mx-auto">
-                  This document certifies that <strong className="text-slate-900">{client?.company}</strong> has recorded a total settled turnover of <strong className="text-emerald-600">AED {stats.totalPaid.toLocaleString()}</strong> across {stats.paidCount} fulfilled media contracts.
+            <div id="printable-certificate-area" className="p-12 text-center space-y-6 bg-white text-slate-900">
+              <ShieldCheck size={48} className="mx-auto text-emerald-600" />
+              <h1 className="text-2xl font-black uppercase tracking-tight">Certificate of Financial Clearance</h1>
+              <p className="text-sm text-slate-600 max-w-lg mx-auto">
+                This certifies that <strong>{selectedClient.company}</strong> ({selectedClient.name}) has settled all finalized invoices for the period <strong>{activePeriodLabel}</strong> with zero outstanding balance due.
+              </p>
+              <div className="p-6 bg-emerald-50 rounded-2xl max-w-md mx-auto border border-emerald-200">
+                <p className="text-xs font-black uppercase text-emerald-700">Total Cleared Volume</p>
+                <p className="text-2xl font-black text-emerald-900 mt-1">
+                  {currencySymbol} {stats.totalPaid.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                 </p>
-
-                <div className="grid grid-cols-2 gap-4 p-4 bg-slate-50 rounded-xl border border-slate-200 text-xs">
-                  <div>
-                    <span className="text-slate-400 font-bold block text-[10px] uppercase">Settled Invoices</span>
-                    <span className="font-black text-slate-900">{stats.paidCount} Invoices</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 font-bold block text-[10px] uppercase">Remaining Due</span>
-                    <span className={`font-black ${stats.balance === 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                      AED {stats.balance.toLocaleString()}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="pt-4 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400 font-bold">
-                  <span>Issuer: {settings?.name || 'Accounts & Invoicing'}</span>
-                  <span>Date: {new Date().toLocaleDateString('en-GB')}</span>
-                </div>
-              </div>
-
-              <div className="flex justify-end space-x-3">
-                <button
-                  onClick={handleDownloadSettlementCSV}
-                  className="px-4 py-2.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-bold text-xs hover:bg-slate-50 dark:hover:bg-slate-700 flex items-center space-x-1.5"
-                >
-                  <FileSpreadsheet size={15} />
-                  <span>Download CSV</span>
-                </button>
-                <button
-                  onClick={handleDownloadCertificatePDF}
-                  disabled={isExportingPdf}
-                  className="px-4 py-2.5 rounded-xl bg-emerald-600 text-white font-bold text-xs hover:bg-emerald-700 flex items-center space-x-1.5 shadow-md disabled:opacity-50"
-                >
-                  {isExportingPdf ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />}
-                  <span>Download PDF</span>
-                </button>
-                <button
-                  onClick={handlePrintCertificate}
-                  className="px-5 py-2.5 rounded-xl bg-indigo-600 text-white font-bold text-xs hover:bg-indigo-700 flex items-center space-x-1.5 shadow-md"
-                >
-                  <Printer size={15} />
-                  <span>Print</span>
-                </button>
               </div>
             </div>
           </div>

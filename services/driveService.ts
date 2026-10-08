@@ -2,6 +2,7 @@
 import { Invoice, Client, Expense, StaffMember, StaffAdvance, StaffAttendanceRecord, CompanySettings, UserAccount } from '../types';
 import { 
   uploadFileToGoogleDrive, 
+  updateFileInGoogleDrive,
   listGoogleDriveFiles, 
   downloadGoogleDriveFileContent, 
   isGoogleDriveConnected, 

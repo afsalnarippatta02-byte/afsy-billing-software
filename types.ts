@@ -10,6 +10,7 @@ export enum ProjectType {
 
 export enum InvoiceStatus {
   QUOTATION = 'Quotation',
+  PROFORMA = 'Proforma',
   DRAFT = 'Draft',
   SENT = 'Sent',
   PAID = 'Paid',
@@ -124,6 +125,7 @@ export interface Invoice {
   date: string;
   dueDate: string;
   status: InvoiceStatus;
+  documentType?: 'INVOICE' | 'PROFORMA' | 'QUOTATION';
   items: LineItem[];
   notes?: string;
   taxRate: number;
@@ -176,7 +178,7 @@ export interface CompanySettings {
 
 export type View = 'dashboard' | 'invoices' | 'clients' | 'statements' | 'expenses' | 'staff' | 'ai-helper' | 'settings';
 
-export type GeminiModelType = 'gemini-3.5-flash' | 'gemini-3.1-pro-preview' | 'gemini-3.1-flash-lite';
+export type GeminiModelType = 'gemini-3.8-flash' | 'gemini-3.5-flash' | 'gemini-3.1-pro-preview' | 'gemini-3.1-flash-lite' | 'local-offline-ai';
 
 export interface ChatMessage {
   id: string;

@@ -181,6 +181,61 @@ export const uploadFileToGoogleDrive = async (
 };
 
 /**
+ * Update an existing file in Google Drive by fileId (or create if no fileId)
+ */
+export const updateFileInGoogleDrive = async (
+  fileId: string,
+  fileName: string,
+  mimeType: string,
+  content: Blob | string
+): Promise<GoogleDriveFile> => {
+  const token = await getAccessToken();
+  if (!token) {
+    throw new Error('Not authenticated with Google Drive. Please sign in first.');
+  }
+
+  const metadata: any = {
+    name: fileName,
+    mimeType: mimeType
+  };
+
+  const boundary = '-------314159265358979323846';
+  const delimiter = `\r\n--${boundary}\r\n`;
+  const closeDelimiter = `\r\n--${boundary}--`;
+
+  const blobData = typeof content === 'string' ? new Blob([content], { type: mimeType }) : content;
+  const metadataBlob = new Blob([JSON.stringify(metadata)], { type: 'application/json' });
+
+  const multipartBody = new Blob([
+    delimiter,
+    'Content-Type: application/json; charset=UTF-8\r\n\r\n',
+    metadataBlob,
+    delimiter,
+    `Content-Type: ${mimeType}\r\n\r\n`,
+    blobData,
+    closeDelimiter
+  ]);
+
+  const response = await fetch(
+    `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart&fields=id,name,mimeType,createdTime,modifiedTime,size`,
+    {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`
+      },
+      body: multipartBody
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Google Drive update failed (${response.status}): ${errorText}`);
+  }
+
+  return await response.json();
+};
+
+/**
  * List files stored in Google Drive matching query
  */
 export const listGoogleDriveFiles = async (

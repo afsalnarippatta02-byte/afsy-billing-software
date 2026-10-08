@@ -531,7 +531,10 @@ const App: React.FC = () => {
             <Statements 
               invoices={invoices} 
               clients={clients} 
+              expenses={expenses}
+              categories={categories}
               settings={settings}
+              language={language}
               onSelectInvoice={(id) => {
                 setActiveView('invoices');
                 setSelectedInvoiceId(id);
