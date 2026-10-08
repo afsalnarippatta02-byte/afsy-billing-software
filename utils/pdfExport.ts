@@ -68,7 +68,7 @@ export const printElementDirectly = (elementId: string, title?: string): Promise
               body {
                 background: #ffffff !important;
                 color: #000000 !important;
-                font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+                font-family: 'UAEDirham', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
                 margin: 0;
                 padding: 12px;
                 -webkit-print-color-adjust: exact;

@@ -1,5 +1,11 @@
 import { Invoice, InvoiceStatus } from '../types';
 
+/**
+ * Official Central Bank of the UAE Dirham Sign (Unicode 18.0 Code Point U+20C3)
+ * Stylized Latin capital letter "D" crossed with two horizontal parallel lines.
+ */
+export const UAE_DIRHAM_SYMBOL = '\u20C3';
+
 export interface CurrencyInfo {
   code: string;
   symbol: string;
@@ -8,7 +14,7 @@ export interface CurrencyInfo {
 }
 
 export const ALL_CURRENCIES: CurrencyInfo[] = [
-  { code: 'AED', symbol: 'د.إ', name: 'UAE Dirham (AED)', nativeSymbol: 'د.إ' },
+  { code: 'AED', symbol: '\u20C3', name: 'UAE Dirham (\u20C3 / AED)', nativeSymbol: '\u20C3' },
   { code: 'USD', symbol: '$', name: 'US Dollar (USD - $)', nativeSymbol: '$' },
   { code: 'INR', symbol: '₹', name: 'Indian Rupee (INR - ₹)', nativeSymbol: '₹' },
   { code: 'EUR', symbol: '€', name: 'Euro (EUR - €)', nativeSymbol: '€' },
@@ -30,16 +36,21 @@ export const ALL_CURRENCIES: CurrencyInfo[] = [
 ];
 
 export const getCurrencySymbol = (currencyCodeOrSymbol?: string): string => {
-  if (!currencyCodeOrSymbol) return 'د.إ';
+  if (!currencyCodeOrSymbol) return UAE_DIRHAM_SYMBOL;
   const trimmed = currencyCodeOrSymbol.trim();
-  // If it's already a symbol like ₹, $, €, £, ¥, د.إ, etc.
-  if (['₹', '$', '€', '£', '¥', 'د.إ', 'ر.س', 'ر.ق', 'ر.ع', 'د.ك', 'د.ب', 'CA$', 'A$', 'S$', 'RM', '₨', '৳', '₱'].includes(trimmed)) {
+  // Always replace legacy Arabic Dirham symbol or AED code with the new official U+20C3 UAE Dirham symbol
+  if (trimmed === 'د.إ' || trimmed === '\u20C3') {
+    return UAE_DIRHAM_SYMBOL;
+  }
+  if (['₹', '$', '€', '£', '¥', 'ر.س', 'ر.ق', 'ر.ع', 'د.ك', 'د.ب', 'CA$', 'A$', 'S$', 'RM', '₨', '৳', '₱'].includes(trimmed)) {
     return trimmed;
   }
   const codeClean = trimmed.toUpperCase();
   const found = ALL_CURRENCIES.find(c => c.code.toUpperCase() === codeClean);
   if (found) return found.symbol;
-  if (codeClean === 'DH' || codeClean === 'DHS' || codeClean === 'DIRHAM' || codeClean === 'DIRHAMS' || codeClean === 'AED') return 'د.إ';
+  if (codeClean === 'DH' || codeClean === 'DHS' || codeClean === 'DIRHAM' || codeClean === 'DIRHAMS' || codeClean === 'AED') {
+    return UAE_DIRHAM_SYMBOL;
+  }
   if (codeClean === 'DOLLAR' || codeClean === 'DOLLARS' || codeClean === 'USD') return '$';
   if (codeClean === 'RUPEE' || codeClean === 'RUPEES' || codeClean === 'RS' || codeClean === 'INR') return '₹';
   if (codeClean === 'RIYAL' || codeClean === 'SAR') return 'ر.س';
@@ -67,9 +78,6 @@ export const formatMoneyCompact = (amount: number | undefined | null, currencyCo
 
 /**
  * Checks whether an invoice is overdue.
- * An invoice is overdue if:
- * 1. Status is explicitly OVERDUE, OR
- * 2. Status is not PAID and not QUOTATION, and dueDate is strictly before today's date.
  */
 export const isInvoiceOverdue = (invoice: Invoice): boolean => {
   if (!invoice) return false;

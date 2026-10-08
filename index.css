@@ -1,8 +1,36 @@
-/* Global styles for Af© ACCOUNTS */
+/* Global styles for Af© ACCOUNTS — Official UAE Dirham Symbol (U+20C3) & Responsive Alignment */
+@font-face {
+  font-family: 'UAEDirham';
+  src: url('data:font/ttf;base64,AAEAAAAKAIAAAwAgT1MvMnJ2bbYAAACsAAAAYGNtYXAADCEWAAABDAAAADRnbHlmEuANdgAAAUAAAADMaGVhZGIHQ7UAAAIMAAAANmhoZWEGCwJqAAACRAAAACRobXR4BVoARgAAAmgAAAAIbG9jYQBmABIAAAJwAAAABm1heHAABQAgAAACeAAAACBuYW1lAcEakgAAApgAAABgcG9zdP+fADIAAAL4AAAAIAAEAwICvAAFAAAB9AKKAAD/nAH0AooAAAEsADIA+gAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAABBRkFDAEAgwyDDAyD/OAAAAyAAyAAAAAEAAAAAAfQC0AAAAAAAAAAAAAIAAAADAAAAFAADAAEAAAAUAAQAIAAAAAQABAABAAAgw///AAAgw///3z4AAQAAAAAAAQAyAAACJgK8AAMAAAEBAQEAMgAAAfQAAAAAArwAAP1EAAAAAgAUAAAC1QLQAA4AHQAAAQEBAQEBAQEBAQEAAQABAQEBAQEBAQEBAQEAAQABAJEAAP+DAAAAfQAA/4MAAAB9AAABNgEOAAAAAP7y/0IAAAEJAAD+9wAAAQkAAP73AAAArwCgAAAAAP9gAAAA6wAAAFAAAABaAAAAUAAAAOsAAAAA/pj+mAAAAmL/gwAA/7AAAP+mAAD/sAAA/4MAAAAAAPoA+gAAAAAAAQAAAAEAALxkm2FfDzz1AAsD6AAAAAAAAAAAAAAAAAAAAAAAFAAAAtUC0AAAAAgAAgAAAAAAAAABAAADIP84AAADAgAUAC0C1QABAAAAAAAAAAAAAAAAAAAAAgJYADIDAgAUAAAAEgBmAAAAAQAAAAIAHgACAAAAAAACAAAAAAAAAAAAAAAAAAAAAAAAAAYATgADAAEECQABABIAAAADAAEECQACABIAAAADAAEECQADABIAAAADAAEECQAEABIAAAADAAEECQAFABIAAAADAAEECQAGABIAAABVAEEARQBEAGkAcgBoAGEAbQADAAAAAAAA/5wAMgAAAAAAAAAAAAAAAAAAAAAAAAAA') format('truetype');
+  font-weight: 100 900;
+  font-style: normal;
+  unicode-range: U+20C3;
+  font-display: block;
+}
 
-body {
+* {
+  box-sizing: border-box;
+}
+
+html, body {
   margin: 0;
   padding: 0;
+  width: 100%;
+  max-width: 100vw;
+  overflow-x: hidden;
+  font-family: 'UAEDirham', 'Inter', 'Tajawal', system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+input, select, textarea, button {
+  font-family: 'UAEDirham', 'Inter', 'Tajawal', system-ui, -apple-system, sans-serif;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }

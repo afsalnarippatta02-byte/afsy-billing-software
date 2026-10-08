@@ -156,33 +156,191 @@ export const gatherAppBackupPayload = (userEmail?: string): AppBackupPayload => 
 };
 
 /**
- * Automatically sync and save all data to Google Drive cloud vault for the specified email
+ * Automatically sync and save all data to Google Drive cloud vault + Multi-Device Server Email Vault for the specified email
  */
 export const syncToGoogleDriveCloud = async (
   email: string,
   payload?: AppBackupPayload
 ): Promise<{ success: boolean; timestamp: string; invoiceCount: number; message: string }> => {
-  const data = payload || gatherAppBackupPayload(email);
-  data.userEmail = email;
+  const cleanEmail = (email || '').toLowerCase().trim();
+  const data = payload || gatherAppBackupPayload(cleanEmail);
+  data.userEmail = cleanEmail;
   data.exportedAt = new Date().toISOString();
 
-  // Save to Google Drive Cloud Vault keyed by email in persistent local storage
-  const existingBackups = JSON.parse(localStorage.getItem(DRIVE_BACKUPS_STORAGE_KEY) || '{}');
-  existingBackups[email.toLowerCase().trim()] = {
-    ...data,
-    lastSyncTime: data.exportedAt
-  };
-  localStorage.setItem(DRIVE_BACKUPS_STORAGE_KEY, JSON.stringify(existingBackups));
+  // 1. Save to local device storage keyed by email (for 100% offline availability)
+  try {
+    const existingBackups = JSON.parse(localStorage.getItem(DRIVE_BACKUPS_STORAGE_KEY) || '{}');
+    existingBackups[cleanEmail] = {
+      ...data,
+      lastSyncTime: data.exportedAt
+    };
+    localStorage.setItem(DRIVE_BACKUPS_STORAGE_KEY, JSON.stringify(existingBackups));
+    setLinkedDriveAccount(cleanEmail);
+  } catch (e) {
+    console.warn('Local storage backup warning:', e);
+  }
 
-  // Also update linked email
-  setLinkedDriveAccount(email);
+  // 2. Sync to Multi-Device Server Email Cloud Vault (/api/sync) so PC & Mobile with same Email ID share all data
+  try {
+    if (typeof navigator === 'undefined' || navigator.onLine) {
+      await fetch('/api/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: cleanEmail,
+          payload: data,
+          mode: 'merge'
+        })
+      });
+    }
+  } catch (e) {
+    console.warn('Multi-device server vault sync warning (offline mode active):', e);
+  }
+
+  // 3. If Google Drive OAuth is connected, update or create the master file on Google Drive
+  try {
+    if (isGoogleDriveConnected()) {
+      const masterFileName = `AfAccounts_Master_Sync_${cleanEmail.replace(/[^a-z0-9]/gi, '_')}.json`;
+      const existingFiles = await listGoogleDriveFiles(masterFileName);
+      const exactFile = existingFiles.find(f => f.name === masterFileName);
+      const jsonStr = JSON.stringify(data, null, 2);
+      if (exactFile) {
+        await updateFileInGoogleDrive(exactFile.id, masterFileName, 'application/json', jsonStr);
+      } else {
+        await uploadFileToGoogleDrive(masterFileName, 'application/json', jsonStr);
+      }
+    }
+  } catch (e) {
+    console.warn('Google Drive background master sync warning:', e);
+  }
+
+  // 4. Broadcast to other open tabs on the same device
+  try {
+    if (typeof BroadcastChannel !== 'undefined') {
+      const bc = new BroadcastChannel('af_accounts_sync_channel');
+      bc.postMessage({ type: 'DATA_SYNCED', email: cleanEmail, timestamp: data.exportedAt });
+      bc.close();
+    }
+  } catch {
+    // ignore
+  }
 
   return {
     success: true,
     timestamp: data.exportedAt,
     invoiceCount: data.invoices.length,
-    message: `Successfully synchronized ${data.invoices.length} invoices, ${data.clients.length} clients, and accounts to Google Drive for ${email}.`
+    message: `Synchronized ${data.invoices.length} invoices, ${data.clients.length} clients, and expenses across all PC & Mobile devices linked to ${cleanEmail}.`
   };
+};
+
+/**
+ * Pull and merge data associated with an Email ID from Google Drive + Multi-Device Server Cloud Vault + Local Vault
+ */
+export const pullFromCloudAndDriveByEmail = async (
+  email: string,
+  mode: 'merge' | 'replace' = 'merge'
+): Promise<{ success: boolean; data?: AppBackupPayload; message: string }> => {
+  const cleanEmail = (email || '').toLowerCase().trim();
+  if (!cleanEmail) {
+    return { success: false, message: 'Please enter a valid email address.' };
+  }
+
+  setLinkedDriveAccount(cleanEmail);
+
+  // 1. Check Google Drive Master File first if connected
+  try {
+    if (isGoogleDriveConnected()) {
+      const masterFileName = `AfAccounts_Master_Sync_${cleanEmail.replace(/[^a-z0-9]/gi, '_')}.json`;
+      let files = await listGoogleDriveFiles(masterFileName);
+      if (files.length === 0) {
+        files = await listGoogleDriveFiles('AfAccounts');
+      }
+      if (files.length > 0) {
+        const raw = await downloadGoogleDriveFileContent(files[0].id);
+        const parsed: AppBackupPayload = JSON.parse(raw);
+        if (parsed && (Array.isArray(parsed.invoices) || Array.isArray(parsed.clients))) {
+          applyBackupPayload(parsed, mode);
+          return {
+            success: true,
+            data: gatherAppBackupPayload(cleanEmail),
+            message: `Automatically synced data from Google Drive for ${cleanEmail}!`
+          };
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('Google Drive pull fallback to server email vault:', e);
+  }
+
+  // 2. Check Multi-Device Server Email Cloud Vault (/api/sync/:email)
+  try {
+    if (typeof navigator === 'undefined' || navigator.onLine) {
+      const res = await fetch(`/api/sync/${encodeURIComponent(cleanEmail)}`);
+      if (res.ok) {
+        const result = await res.json();
+        if (result.success && result.data) {
+          applyBackupPayload(result.data, mode);
+          // Also cache in local vault
+          const existingBackups = JSON.parse(localStorage.getItem(DRIVE_BACKUPS_STORAGE_KEY) || '{}');
+          existingBackups[cleanEmail] = result.data;
+          localStorage.setItem(DRIVE_BACKUPS_STORAGE_KEY, JSON.stringify(existingBackups));
+          return {
+            success: true,
+            data: gatherAppBackupPayload(cleanEmail),
+            message: `Synced ${result.data.invoices?.length || 0} invoices and ${result.data.clients?.length || 0} clients linked to ${cleanEmail}!`
+          };
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('Server email vault pull fallback to local storage:', e);
+  }
+
+  // 3. Fallback to Local Device Vault
+  const localResult = fetchFromGoogleDriveCloud(cleanEmail);
+  if (localResult.success && localResult.data) {
+    applyBackupPayload(localResult.data, mode);
+    return {
+      success: true,
+      data: gatherAppBackupPayload(cleanEmail),
+      message: localResult.message
+    };
+  }
+
+  // If no existing cloud record yet, initialize cloud vault with current device data for this email!
+  await syncToGoogleDriveCloud(cleanEmail);
+  return {
+    success: true,
+    data: gatherAppBackupPayload(cleanEmail),
+    message: `Linked ${cleanEmail} and uploaded current device data for multi-device PC & Mobile sync.`
+  };
+};
+
+/**
+ * Local Offline Data Sharing (AirDrop / Nearby Share / WhatsApp / Direct File Transfer)
+ */
+export const shareLocalDataOffline = async (userEmail?: string): Promise<string> => {
+  const payload = gatherAppBackupPayload(userEmail);
+  const jsonString = JSON.stringify(payload, null, 2);
+  const dateStr = new Date().toISOString().split('T')[0];
+  const fileName = `AfAccounts-Sync-${userEmail ? userEmail.split('@')[0] + '-' : ''}${dateStr}.json`;
+
+  try {
+    const file = new File([jsonString], fileName, { type: 'application/json' });
+    if (typeof navigator !== 'undefined' && navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({
+        title: 'Af© ACCOUNTS Workspace Data Sync',
+        text: `Local workspace data backup (${payload.invoices.length} invoices, ${payload.clients.length} clients)`,
+        files: [file]
+      });
+      return 'Shared local data file successfully via device share sheet!';
+    }
+  } catch (err) {
+    console.warn('Web Share API fallback to direct file download:', err);
+  }
+
+  downloadLocalBackupJSON(userEmail);
+  return 'Downloaded local data sync file to your device!';
 };
 
 /**

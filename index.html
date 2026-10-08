@@ -8,29 +8,37 @@
     <link rel="icon" type="image/svg+xml" href="/logo.svg">
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
-      tailwind.config = {
-        darkMode: 'class',
-        theme: {
-          extend: {
-            fontFamily: {
-              sans: ['Inter', 'Tajawal', 'system-ui', 'sans-serif'],
-              arabic: ['Tajawal', 'Cairo', 'sans-serif'],
-            },
-            colors: {
-              darkbg: '#0b0f19',
-              darkcard: '#131b2e',
-              darkborder: '#1f293d',
+        tailwind.config = {
+          darkMode: 'class',
+          theme: {
+            extend: {
+              fontFamily: {
+                sans: ['UAEDirham', 'Inter', 'Tajawal', 'system-ui', 'sans-serif'],
+                arabic: ['UAEDirham', 'Tajawal', 'Cairo', 'sans-serif'],
+              },
+              colors: {
+                darkbg: '#0b0f19',
+                darkcard: '#131b2e',
+                darkborder: '#1f293d',
+              }
             }
           }
         }
-      }
-    </script>
+      </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&family=Inter:wght@300;400;500;600;700;800;900&family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet">
     <style>
+        @font-face {
+            font-family: 'UAEDirham';
+            src: url('data:font/ttf;base64,AAEAAAAKAIAAAwAgT1MvMnJ2bbYAAACsAAAAYGNtYXAADCEWAAABDAAAADRnbHlmEuANdgAAAUAAAADMaGVhZGIHQ7UAAAIMAAAANmhoZWEGCwJqAAACRAAAACRobXR4BVoARgAAAmgAAAAIbG9jYQBmABIAAAJwAAAABm1heHAABQAgAAACeAAAACBuYW1lAcEakgAAApgAAABgcG9zdP+fADIAAAL4AAAAIAAEAwICvAAFAAAB9AKKAAD/nAH0AooAAAEsADIA+gAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAABBRkFDAEAgwyDDAyD/OAAAAyAAyAAAAAEAAAAAAfQC0AAAAAAAAAAAAAIAAAADAAAAFAADAAEAAAAUAAQAIAAAAAQABAABAAAgw///AAAgw///3z4AAQAAAAAAAQAyAAACJgK8AAMAAAEBAQEAMgAAAfQAAAAAArwAAP1EAAAAAgAUAAAC1QLQAA4AHQAAAQEBAQEBAQEBAQEAAQABAQEBAQEBAQEBAQEAAQABAJEAAP+DAAAAfQAA/4MAAAB9AAABNgEOAAAAAP7y/0IAAAEJAAD+9wAAAQkAAP73AAAArwCgAAAAAP9gAAAA6wAAAFAAAABaAAAAUAAAAOsAAAAA/pj+mAAAAmL/gwAA/7AAAP+mAAD/sAAA/4MAAAAAAPoA+gAAAAAAAQAAAAEAALxkm2FfDzz1AAsD6AAAAAAAAAAAAAAAAAAAAAAAFAAAAtUC0AAAAAgAAgAAAAAAAAABAAADIP84AAADAgAUAC0C1QABAAAAAAAAAAAAAAAAAAAAAgJYADIDAgAUAAAAEgBmAAAAAQAAAAIAHgACAAAAAAACAAAAAAAAAAAAAAAAAAAAAAAAAAYATgADAAEECQABABIAAAADAAEECQACABIAAAADAAEECQADABIAAAADAAEECQAEABIAAAADAAEECQAFABIAAAADAAEECQAGABIAAABVAEEARQBEAGkAcgBoAGEAbQADAAAAAAAA/5wAMgAAAAAAAAAAAAAAAAAAAAAAAAAA') format('truetype');
+            font-weight: 100 900;
+            font-style: normal;
+            unicode-range: U+20C3;
+            font-display: block;
+        }
         body {
-            font-family: 'Inter', 'Tajawal', sans-serif;
+            font-family: 'UAEDirham', 'Inter', 'Tajawal', sans-serif;
             background-color: #f8fafc;
             color: #0f172a;
         }

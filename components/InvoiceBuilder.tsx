@@ -1,42 +1,146 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  Plus, Trash2, ChevronLeft, Save, Calendar, UserPlus, Printer, X, Download, 
-  FileCheck, CheckCircle2, FileSignature, FileText, Loader2, Mail, Send, 
-  Copy, ExternalLink, Hash, MapPin, Phone, Clock
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  Plus,
+  Trash2,
+  Sparkles,
+  Save,
+  ArrowLeft,
+  ChevronRight,
+  ChevronDown,
+  Printer,
+  Check,
+  Building2,
+  MapPin,
+  FileText,
+  Mail,
+  Phone,
+  Hash,
+  Download,
+  CreditCard,
+  Send,
+  Copy,
+  ExternalLink,
+  X,
+  Loader2,
+  CheckCircle2,
+  FileBadge,
+  AlertTriangle
 } from 'lucide-react';
-import { Invoice, Client, LineItem, ProjectType, InvoiceStatus, CompanySettings, UserRole, PaymentMethod } from '../types';
-import { downloadElementAsPdf, printElementDirectly } from '../utils/pdfExport';
-import { formatMoney, getCurrencySymbol } from '../utils/currency';
+import { Invoice, InvoiceStatus, LineItem, Client, CompanySettings, UserRole, PaymentMethod } from '../types';
+import { SERVICE_PRESETS } from '../constants';
+import { geminiService } from '../services/geminiService';
+import { downloadElementAsPdf, printElementDirectly, downloadDocumentAsHtml } from '../utils/pdfExport';
+import { getCurrencySymbol } from '../utils/currency';
 
 interface InvoiceBuilderProps {
   invoiceId: string | null;
+  initialDocumentType?: 'INVOICE' | 'PROFORMA' | 'QUOTATION';
   autoPrint?: boolean;
   clients: Client[];
-  invoices: Invoice[];
-  onAddClient: (c: Client) => void;
+  invoices?: Invoice[];
+  onAddClient: (client: Client) => void;
   settings: CompanySettings;
   role: UserRole;
   onSave: (invoice: Invoice) => void;
-  onCancel: () => void;
   onDelete?: (id: string) => void;
+  onCancel: () => void;
 }
 
-export const InvoiceBuilder: React.FC<InvoiceBuilderProps> = ({ 
-  invoiceId, 
-  autoPrint, 
-  clients, 
-  invoices, 
-  onAddClient, 
-  settings, 
-  role, 
-  onSave, 
-  onCancel,
-  onDelete
-}) => {
-  const [isExportingPdf, setIsExportingPdf] = useState(false);
-  const [exportStatusMsg, setExportStatusMsg] = useState('');
+const getNextSequentialNumber = (existingInvoices: Invoice[] = [], prefix: string = 'INV-') => {
+  let maxNumber = 2026120;
+  existingInvoices.forEach(inv => {
+    const matches = inv.id.match(/\d+/g);
+    if (matches && matches.length > 0) {
+      const lastNumStr = matches[matches.length - 1];
+      const num = parseInt(lastNumStr, 10);
+      if (!isNaN(num) && num >= 2026000 && num > maxNumber) {
+        maxNumber = num;
+      }
+    }
+  });
+  return `${prefix}${maxNumber + 1}`;
+};
 
-  // Email Modal State
+export const InvoiceBuilder: React.FC<InvoiceBuilderProps> = ({
+  invoiceId,
+  initialDocumentType = 'INVOICE',
+  autoPrint,
+  clients,
+  invoices = [],
+  onAddClient,
+  settings,
+  role,
+  onSave,
+  onDelete,
+  onCancel
+}) => {
+  const getToday = () => new Date().toISOString().split('T')[0];
+  const getNextMonth = () => {
+    const d = new Date();
+    d.setMonth(d.getMonth() + 1);
+    return d.toISOString().split('T')[0];
+  };
+
+  const formatDate = (dateStr: string) => {
+    if (!dateStr) return '';
+    const parts = dateStr.split('-');
+    if (parts.length === 3) {
+      return `${parts[2]}-${parts[1]}-${parts[0]}`;
+    }
+    return dateStr;
+  };
+
+  const initialPrefix =
+    initialDocumentType === 'PROFORMA'
+      ? 'PI-'
+      : initialDocumentType === 'QUOTATION'
+      ? 'QT-'
+      : settings.invoicePrefix || 'INV-';
+
+  const initialStatus =
+    initialDocumentType === 'PROFORMA'
+      ? InvoiceStatus.PROFORMA
+      : initialDocumentType === 'QUOTATION'
+      ? InvoiceStatus.QUOTATION
+      : InvoiceStatus.DRAFT;
+
+  const [invoice, setInvoice] = useState<Invoice>(() => ({
+    id: getNextSequentialNumber(invoices, initialPrefix),
+    clientId: clients[0]?.id || '',
+    date: getToday(),
+    dueDate: getNextMonth(),
+    status: initialStatus,
+    documentType: initialDocumentType,
+    items: [
+      { id: '1', category: 'Ad Campaign', service: 'Shoot', description: 'Main Commercial Shoot Day', quantity: 1, rate: 5000 }
+    ],
+    taxRate: settings.defaultTaxRate ?? 5,
+    currency: settings.defaultCurrency || 'AED',
+    discount: 0,
+    paymentMethod: PaymentMethod.BANK_TRANSFER,
+    notes:
+      initialDocumentType === 'PROFORMA'
+        ? `Proforma Invoice valid for 15 days. 50% mobilization advance requested prior to production.\nBank: ${settings.bankName || 'Emirates NBD'} | IBAN: ${settings.iban || 'AE0000000000000'}`
+        : `Please make all payments to ${settings.beneficiaryName || settings.name}. Bank: ${settings.bankName || 'Emirates NBD'} | IBAN: ${settings.iban || 'AE0000000000000'}`
+  }));
+
+  const [isPolishing, setIsPolishing] = useState<string | null>(null);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [exportStatusMsg, setExportStatusMsg] = useState<string>('');
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+  // Quick Client Creation Modal State
+  const [isAddingClient, setIsAddingClient] = useState(false);
+  const [quickClientForm, setQuickClientForm] = useState({
+    company: '',
+    name: '',
+    email: '',
+    phone: '',
+    trn: '',
+    address: ''
+  });
+
+  // Email Sending Modal State
   const [isEmailModalOpen, setIsEmailModalOpen] = useState(false);
   const [emailTo, setEmailTo] = useState('');
   const [emailSubject, setEmailSubject] = useState('');
@@ -45,228 +149,220 @@ export const InvoiceBuilder: React.FC<InvoiceBuilderProps> = ({
   const [emailSuccessMsg, setEmailSuccessMsg] = useState('');
   const [isCopied, setIsCopied] = useState(false);
 
-  // Quick Client Registration State
-  const [isAddingClient, setIsAddingClient] = useState(false);
-  const [quickClientForm, setQuickClientForm] = useState<Partial<Client>>({
-    company: '',
-    name: '',
-    email: '',
-    phone: '',
-    trn: '',
-    address: 'Dubai, UAE',
-    notes: ''
-  });
+  useEffect(() => {
+    if (invoiceId && invoiceId !== 'new') {
+      const found = invoices.find(i => i.id === invoiceId);
+      if (found) {
+        setInvoice({
+          ...found,
+          paymentMethod: found.paymentMethod || PaymentMethod.BANK_TRANSFER
+        });
+      }
+    }
+  }, [invoiceId, invoices]);
 
-  const currencyCode = settings?.defaultCurrency || 'AED';
-  const currSym = getCurrencySymbol(currencyCode);
-  const formatCurr = (amount: number) => formatMoney(amount, currencyCode);
-
-  const getToday = () => new Date().toISOString().split('T')[0];
-  const calculateDueDate = (fromDate: string, days: number) => {
-    const date = new Date(fromDate);
-    date.setDate(date.getDate() + days);
-    return date.toISOString().split('T')[0];
-  };
-
-  const formatDateStrict = (dateStr: string) => {
-    if (!dateStr) return '';
-    const [y, m, d] = dateStr.split('-');
-    return `${d}-${m}-${y}`;
-  };
-
-  const getNextInvoiceId = () => {
-    const ids = invoices
-      .map(inv => {
-        const match = inv.id.match(/INV-(\d+)/);
-        return match ? parseInt(match[1], 10) : 0;
-      })
-      .filter(id => !isNaN(id));
-    
-    const maxId = ids.length > 0 ? Math.max(...ids) : 1000;
-    return `INV-${(maxId + 1).toString().padStart(3, '0')}`;
-  };
-
-  const [dueTermOption, setDueTermOption] = useState<string>('7');
-
-  const [invoice, setInvoice] = useState<Invoice>(() => {
-    return {
-      id: getNextInvoiceId(),
-      date: getToday(),
-      dueDate: calculateDueDate(getToday(), 7),
-      status: InvoiceStatus.DRAFT,
-      taxRate: settings.defaultTaxRate ?? 5,
-      currency: settings.defaultCurrency || 'AED',
-      discount: 0,
-      items: [
-        {
-          id: Math.random().toString(36).substr(2, 9),
-          description: 'Product or Service',
-          serviceType: ProjectType.VIDEO_PRODUCTION,
-          quantity: 1,
-          rate: 1000
-        }
-      ],
-      clientId: clients[0]?.id || '',
-      notes: `Payment Terms: Due within 7 days. Bank transfer to account on file. TRN: ${settings.vatNumber || ''}`
-    };
-  });
-
-  const selectedClient = clients.find(c => c.id === invoice.clientId) || clients[0];
-
-  const handlePrint = async () => {
-    const title = `${invoice.status === InvoiceStatus.QUOTATION ? 'Quotation' : 'Invoice'} ${invoice.id}`;
-    await printElementDirectly('invoice-print-sheet', title);
-  };
-
-  const handleDownloadPdf = async () => {
+  const handleDownloadPdf = useCallback(async () => {
+    if (isExportingPdf) return;
     setIsExportingPdf(true);
-    setExportStatusMsg('Preparing PDF export...');
-    const filename = `${invoice.status === InvoiceStatus.QUOTATION ? 'Quotation' : 'Invoice'}-${invoice.id}`;
-    
-    await downloadElementAsPdf('invoice-print-sheet', filename, (status, msg) => {
-      if (msg) setExportStatusMsg(msg);
-    });
+    setExportStatusMsg('Preparing PDF...');
+
+    const docPrefix =
+      invoice.status === InvoiceStatus.QUOTATION
+        ? 'Quotation'
+        : invoice.status === InvoiceStatus.PROFORMA
+        ? 'Proforma_Invoice'
+        : 'Invoice';
+
+    await downloadElementAsPdf(
+      'invoice-printable-document',
+      `${docPrefix}_${invoice.id}.pdf`,
+      (_status, msg) => {
+        if (msg) setExportStatusMsg(msg);
+      }
+    );
 
     setTimeout(() => {
       setIsExportingPdf(false);
       setExportStatusMsg('');
     }, 1200);
-  };
+  }, [invoice.id, invoice.status, isExportingPdf]);
 
   useEffect(() => {
     if (autoPrint) {
       const timer = setTimeout(() => {
-        handlePrint();
-      }, 700);
+        handleDownloadPdf();
+      }, 600);
       return () => clearTimeout(timer);
     }
-  }, [autoPrint]);
-
-  useEffect(() => {
-    if (invoiceId) {
-      const savedInvoices = localStorage.getItem('cf_invoices');
-      if (savedInvoices) {
-        try {
-          const list = JSON.parse(savedInvoices);
-          if (Array.isArray(list)) {
-            const existing = list.find((i: Invoice) => i.id === invoiceId);
-            if (existing) setInvoice(existing);
-          }
-        } catch (e) {
-          console.error(e);
-        }
-      }
-    }
-  }, [invoiceId]);
-
-  const handleDateChange = (date: string) => {
-    const days = dueTermOption === 'custom' ? 0 : parseInt(dueTermOption) || 7;
-    setInvoice(prev => ({
-      ...prev,
-      date,
-      dueDate: dueTermOption === 'custom' ? prev.dueDate : calculateDueDate(date, days)
-    }));
-  };
-
-  const handleDueTermChange = (termDays: string) => {
-    setDueTermOption(termDays);
-    if (termDays === 'custom') return;
-    const days = parseInt(termDays) || 0;
-    const newDueDate = calculateDueDate(invoice.date, days);
-    setInvoice(prev => ({
-      ...prev,
-      dueDate: newDueDate
-    }));
-  };
-
-  const updateItem = (itemId: string, updates: Partial<LineItem>) => {
-    setInvoice(prev => ({
-      ...prev,
-      items: prev.items.map(item => item.id === itemId ? { ...item, ...updates } : item)
-    }));
-  };
+  }, [autoPrint, handleDownloadPdf]);
 
   const addItem = () => {
-    const newItem: LineItem = {
-      id: Math.random().toString(36).substr(2, 9),
-      description: 'Product or Service Description',
-      serviceType: ProjectType.VIDEO_PRODUCTION,
-      quantity: 1,
-      rate: 500
-    };
-    setInvoice(prev => ({ ...prev, items: [...prev.items, newItem] }));
+    setInvoice(prev => ({
+      ...prev,
+      items: [
+        ...prev.items,
+        {
+          id: Math.random().toString(36).substr(2, 9),
+          category: 'Poster Design',
+          service: ' Design',
+          description: '',
+          quantity: 1,
+          rate: 500
+        }
+      ]
+    }));
   };
 
-  const subtotal = invoice.items.reduce((acc, item) => acc + (item.quantity * item.rate), 0);
-  const discountAmount = subtotal * (invoice.discount / 100);
-  const tax = (subtotal - discountAmount) * (invoice.taxRate / 100);
+  const removeItem = (itemId: string) => {
+    setInvoice(prev => {
+      if (prev.items.length <= 1) {
+        return {
+          ...prev,
+          items: [{ ...prev.items[0], description: '', quantity: 1, rate: 0 }]
+        };
+      }
+      return {
+        ...prev,
+        items: prev.items.filter(i => i.id !== itemId)
+      };
+    });
+  };
+
+  const updateItem = (id: string, updates: Partial<LineItem>) => {
+    setInvoice(prev => ({
+      ...prev,
+      items: prev.items.map(item => (item.id === id ? { ...item, ...updates } : item))
+    }));
+  };
+
+  const switchDocumentMode = (mode: 'INVOICE' | 'PROFORMA' | 'QUOTATION') => {
+    setInvoice(prev => {
+      const numericPart = prev.id.replace(/^(INV-|PI-|QT-)/i, '');
+      const nextPrefix = mode === 'PROFORMA' ? 'PI-' : mode === 'QUOTATION' ? 'QT-' : settings.invoicePrefix || 'INV-';
+      const nextStatus =
+        mode === 'PROFORMA'
+          ? InvoiceStatus.PROFORMA
+          : mode === 'QUOTATION'
+          ? InvoiceStatus.QUOTATION
+          : prev.status === InvoiceStatus.PROFORMA || prev.status === InvoiceStatus.QUOTATION
+          ? InvoiceStatus.SENT
+          : prev.status;
+
+      return {
+        ...prev,
+        id: `${nextPrefix}${numericPart}`,
+        status: nextStatus,
+        documentType: mode
+      };
+    });
+  };
+
+  const handleSaveQuickClient = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!quickClientForm.company.trim() || !quickClientForm.name.trim()) return;
+    const newClient: Client = {
+      id: `c-${Date.now().toString(36)}`,
+      name: quickClientForm.name.trim(),
+      company: quickClientForm.company.trim(),
+      email: quickClientForm.email.trim(),
+      phone: quickClientForm.phone.trim(),
+      trn: quickClientForm.trn.trim(),
+      address: quickClientForm.address.trim()
+    };
+    onAddClient(newClient);
+    setInvoice(prev => ({ ...prev, clientId: newClient.id }));
+    setQuickClientForm({ company: '', name: '', email: '', phone: '', trn: '', address: '' });
+    setIsAddingClient(false);
+  };
+
+  const handlePolish = async (item: LineItem) => {
+    setIsPolishing(item.id);
+    const polished = await geminiService.polishInvoiceDescription(item.service, item.description);
+    updateItem(item.id, { description: polished });
+    setIsPolishing(null);
+  };
+
+  const subtotal = invoice.items.reduce((sum, i) => sum + i.quantity * i.rate, 0);
+  const discountAmount = subtotal * ((invoice.discount || 0) / 100);
+  const tax = (subtotal - discountAmount) * ((invoice.taxRate || 0) / 100);
   const total = subtotal - discountAmount + tax;
-  
+
   const isQuotation = invoice.status === InvoiceStatus.QUOTATION;
-  const docTypeLabel = isQuotation ? 'Quotation' : 'Tax Invoice';
+  const isProforma = invoice.status === InvoiceStatus.PROFORMA;
+  const activeClient = clients.find(c => c.id === invoice.clientId);
 
-  // Open Email Modal with Pre-filled Details
-  const handleOpenEmailModal = () => {
-    const client = selectedClient;
-    const recipient = client?.email || '';
-    const subject = `${docTypeLabel} #${invoice.id} from ${settings.name || 'Af© ACCOUNTS'} - Total: ${formatCurr(total)}`;
-    
-    const itemsList = invoice.items.map(it => `• ${it.description}: ${it.quantity} x ${formatCurr(it.rate)} = ${formatCurr(it.quantity * it.rate)}`).join('\n');
+  const currSym = getCurrencySymbol(invoice.currency || settings.defaultCurrency || 'AED');
+  const formatCurr = (val: number) => `${currSym} ${val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-    const body = `Dear ${client?.name || client?.company || 'Valued Client'},
+  const openEmailModal = () => {
+    const client = clients.find(c => c.id === invoice.clientId);
+    const docType = isQuotation ? 'Quotation' : isProforma ? 'Proforma Invoice' : 'Tax Invoice';
 
-Please find the details for ${docTypeLabel} #${invoice.id} issued by ${settings.name || 'Af© ACCOUNTS'}.
+    setEmailTo(client?.email || '');
+    setEmailSubject(`${docType} #${invoice.id} from ${settings.name || 'Af© ACCOUNTS'}`);
 
-SUMMARY OF CHARGES:
-${itemsList}
+    const itemsSummary = invoice.items
+      .map(
+        i =>
+          `• ${i.service || i.category}: ${i.description || 'Service'} (${i.quantity} x ${currSym} ${i.rate.toLocaleString()}) = ${currSym} ${(i.quantity * i.rate).toLocaleString()}`
+      )
+      .join('\n');
 
-----------------------------------------
-Subtotal: ${formatCurr(subtotal)}
-Tax / VAT (${invoice.taxRate}%): ${formatCurr(tax)}
-TOTAL PAYABLE: ${formatCurr(total)}
-----------------------------------------
+    const bodyText = `Dear ${client?.name || client?.company || 'Valued Client'},
 
-Issue Date: ${formatDateStrict(invoice.date)}
-Due Date: ${formatDateStrict(invoice.dueDate)}
+Greetings from ${settings.name || 'Af© ACCOUNTS'}.
 
-PAYMENT INSTRUCTIONS:
-${invoice.notes || `Payment due by ${formatDateStrict(invoice.dueDate)} via Bank Transfer.`}
+Please find below the summary for ${docType} #${invoice.id}, issued on ${formatDate(invoice.date)}:
 
-Company TRN: ${settings.vatNumber || ''}
-Company Contact: ${settings.email || ''}
+--------------------------------------------------
+${docType.toUpperCase()} SUMMARY (#${invoice.id})
+--------------------------------------------------
+${itemsSummary}
 
-Thank you for your business!
+Subtotal: ${currSym} ${subtotal.toLocaleString()}
+VAT (${invoice.taxRate}%): ${currSym} ${tax.toLocaleString()}
+Total Amount: ${currSym} ${total.toLocaleString()}
+${isQuotation ? 'Valid Until' : 'Due Date'}: ${formatDate(invoice.dueDate)}
+--------------------------------------------------
 
-Warm regards,
-${settings.name || 'Af© ACCOUNTS'}`;
+Payment / Remittance Details:
+Beneficiary: ${settings.beneficiaryName || settings.name}
+Bank: ${settings.bankName || 'Emirates NBD'}
+IBAN: ${settings.iban || 'N/A'}
+Account Number: ${settings.accountNumber || 'N/A'}
 
-    setEmailTo(recipient);
-    setEmailSubject(subject);
-    setEmailBody(body);
+Thank you for your business. Please let us know if you have any questions.
+
+Best regards,
+${settings.name || 'Af© ACCOUNTS'}
+${settings.phone || ''}
+${settings.email || ''}`;
+
+    setEmailBody(bodyText);
     setEmailSuccessMsg('');
     setIsEmailModalOpen(true);
   };
 
-  // Launch Default Mail Client (mailto)
   const handleSendViaMailClient = () => {
-    const mailtoUrl = `mailto:${encodeURIComponent(emailTo)}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
-    window.location.href = mailtoUrl;
+    if (!emailTo.trim()) return;
+    const mailtoLink = `mailto:${encodeURIComponent(emailTo.trim())}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
+    window.location.href = mailtoLink;
+    if (invoice.status === InvoiceStatus.DRAFT) {
+      setInvoice(prev => ({ ...prev, status: InvoiceStatus.SENT }));
+    }
+    setEmailSuccessMsg(`Opened mail client addressed to ${emailTo}!`);
   };
 
-  // Automated In-App Email Sender simulation with log & status
   const handleAutomatedSend = () => {
-    if (!emailTo) {
-      alert('Please enter a recipient email address.');
-      return;
-    }
+    if (!emailTo.trim()) return;
     setIsSendingEmail(true);
     setTimeout(() => {
       setIsSendingEmail(false);
-      setEmailSuccessMsg(`✓ Bill successfully dispatched to ${emailTo} with PDF invoice summary!`);
       if (invoice.status === InvoiceStatus.DRAFT) {
         setInvoice(prev => ({ ...prev, status: InvoiceStatus.SENT }));
       }
-    }, 1200);
+      setEmailSuccessMsg(`Successfully dispatched ${isQuotation ? 'Quotation' : isProforma ? 'Proforma Invoice' : 'Invoice'} #${invoice.id} to ${emailTo}!`);
+    }, 900);
   };
 
   const handleCopyEmail = () => {
@@ -275,421 +371,499 @@ ${settings.name || 'Af© ACCOUNTS'}`;
     setTimeout(() => setIsCopied(false), 2000);
   };
 
-  // Quick Client Save
-  const handleSaveQuickClient = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!quickClientForm.company?.trim() || !quickClientForm.name?.trim()) return;
-
-    const newClient: Client = {
-      id: `c-${Date.now().toString(36)}`,
-      name: quickClientForm.name.trim(),
-      company: quickClientForm.company.trim(),
-      email: quickClientForm.email?.trim() || '',
-      phone: quickClientForm.phone?.trim() || '',
-      trn: quickClientForm.trn?.trim() || '',
-      address: quickClientForm.address?.trim() || 'Dubai, UAE',
-      notes: quickClientForm.notes?.trim() || ''
-    };
-
-    onAddClient(newClient);
-    setInvoice(prev => ({ ...prev, clientId: newClient.id }));
-    setIsAddingClient(false);
-    setQuickClientForm({
-      company: '',
-      name: '',
-      email: '',
-      phone: '',
-      trn: '',
-      address: 'Dubai, UAE',
-      notes: ''
-    });
+  const handlePrint = () => {
+    const prefix = isQuotation ? 'Quotation' : isProforma ? 'Proforma' : 'Invoice';
+    printElementDirectly('invoice-printable-document', `${prefix}_${invoice.id}`);
   };
 
+  const handleSaveAsHtml = () => {
+    const prefix = isQuotation ? 'Quotation' : isProforma ? 'Proforma' : 'Invoice';
+    downloadDocumentAsHtml(
+      'invoice-printable-document',
+      `${prefix}_${invoice.id}.html`,
+      `${prefix} #${invoice.id}`
+    );
+  };
+
+  const isExistingInvoice = Boolean(invoiceId && invoiceId !== 'new' && invoices.some(i => i.id === invoiceId));
+
   return (
-    <div className="max-w-6xl mx-auto space-y-6 pb-20 animate-in zoom-in-95 duration-300">
-      {/* Toast Notification when exporting PDF */}
-      {isExportingPdf && (
-        <div className="fixed bottom-6 right-6 bg-slate-900 text-white px-5 py-3.5 rounded-2xl shadow-2xl z-50 flex items-center space-x-3 border border-slate-700 animate-in slide-in-from-bottom-3 no-print">
-          <Loader2 size={18} className="animate-spin text-indigo-400" />
-          <span className="text-xs font-bold">{exportStatusMsg || 'Generating PDF file...'}</span>
-        </div>
-      )}
-
-      {/* Top Action Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-4 no-print">
-        <button 
-          onClick={onCancel} 
-          className="flex items-center space-x-2 text-slate-500 hover:text-slate-900 dark:hover:text-white font-bold"
-        >
-          <ChevronLeft size={20} /> <span>Return to List</span>
-        </button>
-        
-        <div className="flex bg-white dark:bg-slate-800 p-1 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
-           <button 
-              onClick={() => setInvoice(p => ({...p, status: InvoiceStatus.DRAFT}))}
-              className={`px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${!isQuotation ? 'bg-slate-900 dark:bg-indigo-600 text-white shadow-sm' : 'text-slate-400'}`}
-           >
-             <FileText size={14} /> Official Invoice
-           </button>
-           <button 
-              onClick={() => setInvoice(p => ({...p, status: InvoiceStatus.QUOTATION}))}
-              className={`px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${isQuotation ? 'bg-slate-900 dark:bg-indigo-600 text-white shadow-sm' : 'text-slate-400'}`}
-           >
-             <FileSignature size={14} /> Customer Quotation
-           </button>
-        </div>
-
-        <div className="flex flex-wrap items-center space-x-2">
-          {/* Send Email Button */}
-          <button 
-            onClick={handleOpenEmailModal}
-            title="Send bill to client email"
-            className="flex items-center space-x-2 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 px-4 py-2.5 rounded-2xl font-black uppercase text-xs tracking-wider transition-all shadow-sm"
-          >
-            <Mail size={16} /> <span>Send Email</span>
-          </button>
-
-          {/* Delete Document Button (if editing existing) */}
-          {invoiceId && invoiceId !== 'new' && onDelete && (
-            <button 
-              onClick={() => {
-                if (confirm(`Are you sure you want to permanently delete document #${invoice.id}?`)) {
-                  onDelete(invoice.id);
-                  onCancel();
-                }
-              }}
-              title="Delete Document"
-              className="flex items-center space-x-1.5 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/60 dark:hover:bg-rose-900/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800 px-4 py-2.5 rounded-2xl font-black uppercase text-xs tracking-wider transition-all shadow-sm"
+    <div className="max-w-5xl mx-auto pb-20 animate-in fade-in duration-300">
+      {/* Top Action Header */}
+      <div className="no-print flex flex-col gap-4 mb-6 bg-white dark:bg-slate-900 p-4 sm:p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center space-x-3">
+            <button
+              onClick={onCancel}
+              className="flex items-center space-x-2 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white font-bold text-xs px-3 py-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
             >
-              <Trash2 size={16} /> <span className="hidden sm:inline">Delete</span>
+              <ArrowLeft size={16} />
+              <span>Back</span>
             </button>
-          )}
 
-          {/* Quick Print Button */}
-          <button 
-            onClick={handlePrint}
-            title="Print Document directly"
-            className="flex items-center space-x-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 px-4 py-2.5 rounded-2xl font-black uppercase text-xs tracking-wider transition-all"
-          >
-            <Printer size={16} /> <span className="hidden sm:inline">Print</span>
-          </button>
+            {/* 3-Way Document Type Switcher: Tax Invoice / Proforma Invoice / Quotation */}
+            <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-1 rounded-xl border border-slate-200 dark:border-slate-700">
+              <button
+                type="button"
+                onClick={() => switchDocumentMode('INVOICE')}
+                className={`px-3 py-1.5 rounded-lg text-[11px] font-black uppercase transition-all ${
+                  !isProforma && !isQuotation
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                }`}
+              >
+                Tax Invoice
+              </button>
+              <button
+                type="button"
+                onClick={() => switchDocumentMode('PROFORMA')}
+                className={`px-3 py-1.5 rounded-lg text-[11px] font-black uppercase transition-all ${
+                  isProforma
+                    ? 'bg-purple-600 text-white shadow-sm'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                }`}
+              >
+                Proforma Invoice
+              </button>
+              <button
+                type="button"
+                onClick={() => switchDocumentMode('QUOTATION')}
+                className={`px-3 py-1.5 rounded-lg text-[11px] font-black uppercase transition-all ${
+                  isQuotation
+                    ? 'bg-amber-500 text-white shadow-sm'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                }`}
+              >
+                Quotation
+              </button>
+            </div>
+          </div>
 
-          {/* Download PDF Button */}
-          <button 
-            onClick={handleDownloadPdf}
-            disabled={isExportingPdf}
-            className="flex items-center space-x-2 bg-slate-900 hover:bg-slate-800 dark:bg-slate-700 dark:hover:bg-slate-600 text-white px-5 py-2.5 rounded-2xl font-black uppercase text-xs tracking-wider shadow-md transition-all disabled:opacity-50"
-          >
-            {isExportingPdf ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
-            <span>{isExportingPdf ? 'Exporting...' : 'Download PDF'}</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            {(isQuotation || isProforma) && (
+              <button
+                onClick={() => switchDocumentMode('INVOICE')}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white px-3.5 py-2 rounded-xl font-black text-xs uppercase tracking-wider shadow-sm transition-all flex items-center space-x-1.5"
+              >
+                <Check size={14} />
+                <span>Convert to Tax Invoice</span>
+              </button>
+            )}
 
-          {/* Save Button */}
-          <button 
-            onClick={() => onSave(invoice)} 
-            className="flex items-center space-x-2 bg-indigo-600 text-white px-6 py-2.5 rounded-2xl font-black uppercase text-xs tracking-wider hover:bg-indigo-700 shadow-xl shadow-indigo-100 dark:shadow-none transition-all active:scale-95"
-          >
-            <Save size={16} /> <span>Save</span>
-          </button>
+            <button
+              onClick={openEmailModal}
+              className="flex items-center space-x-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 px-3.5 py-2 rounded-xl font-bold text-xs uppercase tracking-wider transition-all"
+            >
+              <Mail size={14} />
+              <span>Email</span>
+            </button>
+
+            <button
+              onClick={handleDownloadPdf}
+              disabled={isExportingPdf}
+              className="flex items-center space-x-1.5 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl font-bold text-xs uppercase tracking-wider transition-all shadow-sm disabled:opacity-60"
+            >
+              {isExportingPdf ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+              <span>{isExportingPdf ? exportStatusMsg || 'Generating...' : 'PDF'}</span>
+            </button>
+
+            <button
+              onClick={handlePrint}
+              className="flex items-center space-x-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 px-3.5 py-2 rounded-xl font-bold text-xs uppercase tracking-wider transition-all"
+            >
+              <Printer size={14} />
+              <span>Print</span>
+            </button>
+
+            {isExistingInvoice && onDelete && (
+              <button
+                type="button"
+                onClick={() => setShowDeleteConfirm(true)}
+                className="flex items-center space-x-1.5 bg-rose-50 hover:bg-rose-600 text-rose-600 hover:text-white dark:bg-rose-950/50 dark:text-rose-400 border border-rose-200 dark:border-rose-800 px-3.5 py-2 rounded-xl font-black text-xs uppercase tracking-wider transition-all"
+              >
+                <Trash2 size={14} />
+                <span>Delete</span>
+              </button>
+            )}
+
+            <button
+              onClick={() => onSave(invoice)}
+              className="bg-indigo-600 text-white px-5 py-2 rounded-xl font-black text-xs uppercase tracking-wider hover:bg-indigo-700 shadow-lg shadow-indigo-100 dark:shadow-none transition-all flex items-center space-x-1.5"
+            >
+              <Save size={14} />
+              <span>Save {isProforma ? 'Proforma' : isQuotation ? 'Quote' : 'Invoice'}</span>
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Invoice Document Sheet */}
-      <div 
-        id="invoice-print-sheet" 
-        className="bg-white rounded-[32px] border border-slate-200 shadow-2xl p-8 md:p-14 relative overflow-hidden text-slate-900 print:shadow-none print:border-none print:p-4"
+      {/* Main A4 Printable Document Sheet */}
+      <div
+        id="invoice-printable-document"
+        className={`bg-white rounded-3xl p-5 sm:p-8 md:p-12 border shadow-xl print-container transition-all text-slate-900 ${
+          isQuotation
+            ? 'border-amber-300 border-t-8 border-t-amber-500'
+            : isProforma
+            ? 'border-purple-300 border-t-8 border-t-purple-600'
+            : 'border-slate-200 border-t-8 border-t-indigo-600'
+        }`}
       >
-        {/* Accent top stripe */}
-        <div className={`absolute top-0 left-0 w-full h-3 ${isQuotation ? 'bg-slate-600' : 'bg-slate-900'}`}></div>
-        
         {/* Top Header Section */}
-        <div className="flex flex-col md:flex-row justify-between items-start mb-12 relative z-10 gap-8">
-          {/* Company Brand Logo & Information (Left) */}
-          <div className="flex items-start space-x-5 max-w-xl">
-            {settings.logoUrl ? (
-              <div className="w-20 h-20 md:w-24 md:h-24 rounded-2xl bg-white border border-slate-200 p-2 flex items-center justify-center shadow-md overflow-hidden flex-shrink-0">
-                <img 
-                  src={settings.logoUrl} 
-                  alt={settings.name || 'Company Logo'} 
-                  className="max-h-full max-w-full object-contain"
-                  referrerPolicy="no-referrer"
-                  onError={(e) => {
-                    (e.target as HTMLElement).style.display = 'none';
-                  }}
-                />
+        <div className="flex flex-col md:flex-row justify-between items-start gap-6 pb-8 border-b-2 border-slate-100">
+          {/* Left: Company Branding & Details */}
+          <div className="space-y-3 max-w-sm">
+            <div className="flex items-center space-x-3.5">
+              {settings.logoUrl ? (
+                <div className="w-16 h-16 rounded-2xl bg-white border border-slate-200 p-1.5 flex items-center justify-center shadow-sm overflow-hidden flex-shrink-0">
+                  <img
+                    src={settings.logoUrl}
+                    alt={settings.name || 'Company Logo'}
+                    className="max-h-full max-w-full object-contain"
+                    referrerPolicy="no-referrer"
+                  />
+                </div>
+              ) : (
+                <div className="w-14 h-14 bg-indigo-600 rounded-2xl flex items-center justify-center text-white font-black text-2xl shadow-md">
+                  Af
+                </div>
+              )}
+              <div>
+                <h2 className="text-xl font-black text-slate-900 tracking-tight uppercase leading-tight">
+                  {settings.name || 'Af© ACCOUNTS'}
+                </h2>
+                {settings.vatNumber && (
+                  <div className="inline-flex items-center space-x-1 bg-slate-100 text-slate-800 px-2.5 py-0.5 rounded-md text-[11px] font-black tracking-wider mt-1">
+                    <span>TRN: {settings.vatNumber}</span>
+                  </div>
+                )}
               </div>
-            ) : (
-              <div className={`w-20 h-20 md:w-24 md:h-24 rounded-2xl flex items-center justify-center text-white text-2xl font-black shadow-md flex-shrink-0 ${isQuotation ? 'bg-slate-700' : 'bg-slate-900'}`}>
-                {settings.name ? settings.name.split(' ').map(w => w[0]).filter(Boolean).slice(0, 2).join('').toUpperCase() || 'AC' : 'AC'}
-              </div>
-            )}
-            
-            <div className="space-y-1">
-              <h1 className="text-xl md:text-2xl font-black text-slate-900 tracking-tight leading-tight">
-                {settings.name || 'Accounts & Invoicing'}
-              </h1>
+            </div>
+
+            <div className="text-xs text-slate-500 space-y-1 font-medium leading-relaxed pt-1">
               {settings.address && (
-                <p className="text-xs text-slate-500 font-medium leading-relaxed max-w-md">
-                  {settings.address}
+                <p className="flex items-start space-x-1.5">
+                  <MapPin size={13} className="text-slate-400 mt-0.5 flex-shrink-0" />
+                  <span className="whitespace-pre-line">{settings.address}</span>
                 </p>
               )}
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-600 pt-1 font-medium">
-                {settings.email && <span>{settings.email}</span>}
-                {settings.vatNumber && (
-                  <span className="font-bold text-indigo-700 bg-indigo-50 border border-indigo-100 px-2.5 py-0.5 rounded-md text-[11px] inline-flex items-center justify-center">
-                    TRN: {settings.vatNumber}
-                  </span>
+              <div className="flex flex-wrap gap-x-4 gap-y-1 pt-0.5">
+                {settings.email && (
+                  <p className="flex items-center space-x-1">
+                    <Mail size={12} className="text-slate-400" />
+                    <span>{settings.email}</span>
+                  </p>
+                )}
+                {settings.phone && (
+                  <p className="flex items-center space-x-1">
+                    <Phone size={12} className="text-slate-400" />
+                    <span>{settings.phone}</span>
+                  </p>
                 )}
               </div>
             </div>
           </div>
-          
-          {/* Document Reference, Number & Dates (Right) */}
-          <div className="flex flex-col items-start md:items-end space-y-3 flex-shrink-0">
-            <div className="text-left md:text-right">
-              <div className={`inline-flex items-center justify-center text-center px-3 py-1 rounded-lg text-[11px] font-black uppercase tracking-wider mb-1 text-white ${isQuotation ? 'bg-slate-600' : 'bg-slate-900'}`}>
-                {docTypeLabel}
-              </div>
-              <h2 className="text-2xl md:text-3xl font-black text-slate-900 tracking-tight">
-                #{invoice.id}
-              </h2>
+
+          {/* Right: Document Title, ID & Status */}
+          <div className="w-full md:w-auto flex flex-col md:items-end justify-between space-y-4">
+            <div className="md:text-right">
+              <span
+                className={`text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full inline-block mb-2 ${
+                  isQuotation
+                    ? 'bg-amber-100 text-amber-800'
+                    : isProforma
+                    ? 'bg-purple-100 text-purple-800'
+                    : 'bg-indigo-50 text-indigo-700'
+                }`}
+              >
+                {isQuotation
+                  ? 'Commercial Estimate'
+                  : isProforma
+                  ? 'Preliminary Proforma Billing'
+                  : 'Official UAE Tax Document'}
+              </span>
+              <h1 className="text-2xl sm:text-3xl md:text-4xl font-black text-slate-900 uppercase tracking-tight leading-none">
+                {isQuotation ? 'QUOTATION' : isProforma ? 'PROFORMA INVOICE' : 'TAX INVOICE'}
+              </h1>
             </div>
 
-            {invoice.status === InvoiceStatus.PAID && (
-              <div className="bg-emerald-600 text-white px-4 py-1.5 rounded-xl flex items-center justify-center gap-2 shadow-sm text-center">
-                <CheckCircle2 size={16} />
-                <div className="flex flex-col text-center items-center">
-                  <span className="text-[9px] font-black uppercase tracking-widest leading-none">Payment Settled</span>
-                  <span className="text-xs font-bold uppercase">Via {invoice.paymentMethod || 'Bank Transfer'}</span>
-                </div>
-              </div>
-            )}
-
-            <div className="flex flex-wrap items-center justify-center md:justify-end gap-3">
-              <div className="flex flex-col items-center md:items-end text-center md:text-right">
-                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Issue Date</span>
-                <div className="date-badge-black text-xs md:text-sm mt-0.5 font-bold">
-                  {formatDateStrict(invoice.date)}
-                </div>
-                <div className="no-print mt-1 flex justify-end">
-                  <input 
-                    type="date" 
-                    value={invoice.date} 
-                    onChange={e => handleDateChange(e.target.value)} 
-                    className="text-[10px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 outline-none cursor-pointer hover:bg-slate-200 text-center" 
-                  />
-                </div>
+            <div className="flex flex-col sm:flex-row md:flex-col gap-2.5 md:items-end w-full md:w-auto">
+              {/* Document Number */}
+              <div className="flex items-center md:justify-end space-x-2 bg-slate-50 border border-slate-200 px-3.5 py-2 rounded-xl">
+                <span className="text-[11px] font-black text-slate-400 uppercase tracking-wider">
+                  {isQuotation ? 'Quote #' : isProforma ? 'Proforma #' : 'Invoice #'}
+                </span>
+                <input
+                  value={invoice.id}
+                  onChange={e => setInvoice(p => ({ ...p, id: e.target.value }))}
+                  className="text-sm font-black text-slate-900 bg-transparent border-none outline-none w-32 md:text-right"
+                />
               </div>
 
-              {!isQuotation && invoice.status !== InvoiceStatus.PAID && (
-                <div className="flex flex-col items-center md:items-end text-center md:text-right">
-                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Due Date</span>
-                  <div className="date-badge-black text-xs md:text-sm mt-0.5 font-bold">
-                    {formatDateStrict(invoice.dueDate)}
-                  </div>
-                  <div className="no-print mt-1 flex flex-col items-end gap-1">
+              {/* Status & Payment Mode Selector */}
+              <div className="no-print flex flex-wrap items-center gap-2">
+                <div className="flex items-center space-x-2">
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Status:</span>
+                  <select
+                    value={invoice.status}
+                    onChange={e => {
+                      const nextSt = e.target.value as InvoiceStatus;
+                      setInvoice(p => ({
+                        ...p,
+                        status: nextSt,
+                        documentType:
+                          nextSt === InvoiceStatus.PROFORMA
+                            ? 'PROFORMA'
+                            : nextSt === InvoiceStatus.QUOTATION
+                            ? 'QUOTATION'
+                            : 'INVOICE'
+                      }));
+                    }}
+                    className="bg-slate-900 text-white px-3 py-1.5 rounded-lg font-black text-[11px] uppercase tracking-wider outline-none cursor-pointer"
+                  >
+                    {Object.values(InvoiceStatus).map(s => (
+                      <option key={s} value={s} className="bg-white text-slate-900 font-bold">
+                        {s}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {!isQuotation && (
+                  <div className="flex items-center space-x-2">
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Mode:</span>
                     <select
-                      value={dueTermOption}
-                      onChange={e => handleDueTermChange(e.target.value)}
-                      className="text-[10px] font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 outline-none cursor-pointer hover:bg-slate-200"
+                      value={invoice.paymentMethod || PaymentMethod.BANK_TRANSFER}
+                      onChange={e => setInvoice(p => ({ ...p, paymentMethod: e.target.value as PaymentMethod }))}
+                      className="bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-1.5 rounded-lg font-black text-[11px] uppercase tracking-wider outline-none cursor-pointer"
                     >
-                      <option value="0">Immediate / Receipt</option>
-                      <option value="7">7 Days (Standard)</option>
-                      <option value="14">14 Days</option>
-                      <option value="30">30 Days (Net 30)</option>
-                      <option value="60">60 Days (Net 60)</option>
-                      <option value="custom">Custom Date</option>
+                      {Object.values(PaymentMethod).map(m => (
+                        <option key={m} value={m} className="bg-white text-slate-900 font-bold">
+                          {m}
+                        </option>
+                      ))}
                     </select>
-                    {dueTermOption === 'custom' && (
-                      <input 
-                        type="date" 
-                        value={invoice.dueDate} 
-                        onChange={e => setInvoice(prev => ({ ...prev, dueDate: e.target.value }))} 
-                        className="text-[10px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 outline-none cursor-pointer hover:bg-slate-200 text-center" 
-                      />
-                    )}
                   </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Client Details (Billed To) & Invoice Summary Section */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-10 pb-8 border-b border-slate-200">
-          {/* Billed To / Client Details */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between no-print">
-               <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">Billed To (Client Details)</h3>
-               <button 
-                 onClick={() => setIsAddingClient(true)} 
-                 className="text-[10px] font-black text-indigo-600 hover:text-indigo-800 uppercase tracking-widest flex items-center space-x-1"
-               >
-                 <UserPlus size={12} />
-                 <span>+ Quick Add Client</span>
-               </button>
+        {/* Client Info & Dates Section */}
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-6 py-6 border-b-2 border-slate-100 items-start">
+          <div className="md:col-span-7 space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                {isQuotation ? 'Quotation Prepared For' : isProforma ? 'Proforma Billed To' : 'Invoice Billed To'}
+              </label>
+              <button
+                type="button"
+                onClick={() => setIsAddingClient(true)}
+                className="no-print text-[11px] font-black text-indigo-600 hover:text-indigo-700 flex items-center space-x-1 bg-indigo-50 px-2.5 py-1 rounded-lg transition-colors"
+              >
+                <Plus size={12} />
+                <span>New Client</span>
+              </button>
             </div>
 
-            {/* Static print & capture aligned block */}
-            <div className="bg-slate-50/80 rounded-2xl p-4 border border-slate-200/80 space-y-2.5">
-               <div className="flex items-start justify-between gap-2 border-b border-slate-200/60 pb-2">
-                 <div>
-                   <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Customer / Company</h3>
-                   <p className="text-base md:text-lg font-black text-slate-900 leading-tight">
-                     {selectedClient?.company || 'Select Client'}
-                   </p>
-                 </div>
-                 {selectedClient?.trn && (
-                   <span className="font-mono font-bold text-indigo-800 bg-indigo-50 border border-indigo-200/60 px-2 py-0.5 rounded text-[10px] flex-shrink-0">
-                     TRN: {selectedClient.trn}
-                   </span>
-                 )}
-               </div>
-
-               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-slate-600">
-                 <div>
-                   <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 block">Contact Person:</span>
-                   <span className="font-bold text-slate-800">{selectedClient?.name || '—'}</span>
-                 </div>
-                 <div>
-                   <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 block">Contact Phone:</span>
-                   <span className="font-mono font-semibold text-slate-800">{selectedClient?.phone || '—'}</span>
-                 </div>
-                 <div className="sm:col-span-2">
-                   <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 block">Email Address:</span>
-                   <span className="font-medium text-slate-800">{selectedClient?.email || '—'}</span>
-                 </div>
-                 <div className="sm:col-span-2">
-                   <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 block">Registered Billing Address:</span>
-                   <span className="text-slate-600 leading-relaxed block">{selectedClient?.address || 'No registered billing address recorded'}</span>
-                 </div>
-               </div>
-            </div>
-
-            {/* Interactive Selector on Screen */}
-            <div className="no-print pt-1 space-y-1.5">
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">Switch Client Account:</label>
-              <select 
-                value={invoice.clientId} 
-                onChange={e => setInvoice(prev => ({...prev, clientId: e.target.value}))}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 font-bold text-xs text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+            <div className="no-print">
+              <select
+                value={invoice.clientId}
+                onChange={e => setInvoice(p => ({ ...p, clientId: e.target.value }))}
+                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl font-black text-slate-900 text-sm outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
               >
                 {clients.map(c => (
                   <option key={c.id} value={c.id}>
-                    {c.company} — {c.name} {c.trn ? `(TRN: ${c.trn})` : ''}
+                    {c.company} — ({c.name})
                   </option>
                 ))}
               </select>
             </div>
+
+            {activeClient && (
+              <div className="p-4 rounded-2xl bg-slate-50/80 border border-slate-200/80 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <p className="text-base font-black text-slate-900">{activeClient.company}</p>
+                  {activeClient.trn && (
+                    <span className="text-[10px] font-black bg-white border border-slate-200 px-2 py-0.5 rounded text-slate-700">
+                      TRN: {activeClient.trn}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs font-bold text-slate-600">Attn: {activeClient.name}</p>
+                {activeClient.address && (
+                  <p className="text-xs text-slate-500 leading-relaxed">{activeClient.address}</p>
+                )}
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500 font-medium pt-1">
+                  {activeClient.email && <span>{activeClient.email}</span>}
+                  {activeClient.phone && <span>{activeClient.phone}</span>}
+                </div>
+              </div>
+            )}
           </div>
-          
-          {/* Invoice Summary Details */}
-          <div className="text-left md:text-right space-y-3">
-             <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-1.5">Billing Terms & Currency</h3>
-             <div className="bg-slate-50/80 rounded-2xl p-4 border border-slate-200/80 space-y-2 text-xs text-slate-600">
-               <div className="flex md:justify-end gap-3 justify-between">
-                 <span className="text-slate-400 font-bold">Currency:</span>
-                 <span className="font-black text-slate-900">{currencyCode} ({currSym})</span>
-               </div>
-               <div className="flex md:justify-end gap-3 justify-between">
-                 <span className="text-slate-400 font-bold">Tax Application:</span>
-                 <span className="font-black text-slate-900">{invoice.taxRate}% VAT / Tax</span>
-               </div>
-               <div className="flex md:justify-end gap-3 justify-between">
-                 <span className="text-slate-400 font-bold">Issue Date:</span>
-                 <span className="font-bold text-slate-800">{formatDateStrict(invoice.date)}</span>
-               </div>
-               <div className="flex md:justify-end gap-3 justify-between border-t border-slate-200/60 pt-1.5">
-                 <span className="text-slate-400 font-bold">Payment Due Date:</span>
-                 <span className="font-black text-indigo-700">{formatDateStrict(invoice.dueDate)}</span>
-               </div>
-             </div>
+
+          <div className="md:col-span-5 grid grid-cols-2 gap-3 bg-slate-50/70 p-4 rounded-2xl border border-slate-200/70">
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">
+                Issue Date
+              </label>
+              <div className="date-badge-black w-full">
+                <input
+                  type="date"
+                  value={invoice.date}
+                  onChange={e => setInvoice(p => ({ ...p, date: e.target.value }))}
+                  className="bg-transparent text-white font-black text-xs outline-none cursor-pointer no-print w-full text-center"
+                />
+                <span className="hidden print:inline text-xs font-black">{formatDate(invoice.date)}</span>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">
+                {isQuotation ? 'Valid Until' : isProforma ? 'Proforma Valid Until' : 'Due Date'}
+              </label>
+              <div className="date-badge-black w-full">
+                <input
+                  type="date"
+                  value={invoice.dueDate}
+                  onChange={e => setInvoice(p => ({ ...p, dueDate: e.target.value }))}
+                  className="bg-transparent text-white font-black text-xs outline-none cursor-pointer no-print w-full text-center"
+                />
+                <span className="hidden print:inline text-xs font-black">{formatDate(invoice.dueDate)}</span>
+              </div>
+            </div>
+
+            <div className="col-span-2 pt-2 border-t border-slate-200/80 flex items-center justify-between text-xs">
+              <span className="font-bold text-slate-500">Currency & Tax Rate:</span>
+              <span className="font-black text-slate-900">
+                {currSym} ({invoice.currency || 'AED'}) • {invoice.taxRate}% VAT
+              </span>
+            </div>
           </div>
         </div>
 
-        {/* Table of Line Items (Aligned with pixel precision) */}
-        <div className="mb-10">
-          <table className="w-full text-left border-collapse">
+        {/* Line Items Table */}
+        <div className="py-6 overflow-x-auto">
+          <table className="w-full text-left border-collapse min-w-[600px]">
             <thead>
-              <tr className={`border-b-2 ${isQuotation ? 'border-slate-400' : 'border-slate-900'}`}>
-                <th className="pb-3 text-left text-xs font-black text-slate-500 uppercase tracking-wider">
-                  Item / Service Description
-                </th>
-                <th className="pb-3 text-center text-xs font-black text-slate-500 uppercase w-20 tracking-wider">
-                  Qty
-                </th>
-                <th className="pb-3 text-right text-xs font-black text-slate-500 uppercase w-32 tracking-wider">
-                  Rate ({currSym})
-                </th>
-                <th className="pb-3 text-right text-xs font-black text-slate-500 uppercase w-36 tracking-wider">
-                  Total ({currSym})
-                </th>
-                <th className="pb-3 text-right text-xs font-black text-slate-500 uppercase w-8 no-print"></th>
+              <tr className="border-b-2 border-slate-900 text-slate-900 text-[10px] font-black uppercase tracking-wider">
+                <th className="py-3 pr-3 w-48">Category & Service</th>
+                <th className="py-3 px-3">Deliverable Description</th>
+                <th className="py-3 px-2 w-20 text-center">Qty</th>
+                <th className="py-3 px-2 w-32 text-right">Rate ({currSym})</th>
+                <th className="py-3 pl-2 w-36 text-right">Line Total ({currSym})</th>
+                <th className="no-print py-3 pl-2 w-10 text-right"></th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
-              {invoice.items.map((item, idx) => (
-                <tr key={item.id || idx} className="group hover:bg-slate-50/60">
-                  {/* Description */}
-                  <td className="py-3.5 pr-3 text-left">
-                    <div className="no-print">
-                      <input 
-                        value={item.description} 
-                        onChange={e => updateItem(item.id, {description: e.target.value})} 
-                        className="w-full outline-none font-bold text-slate-900 bg-transparent text-xs sm:text-sm py-1 px-2 rounded-lg border border-transparent hover:border-slate-200 focus:border-indigo-400 focus:bg-white transition-all" 
-                        placeholder="Product or service details..."
+            <tbody className="divide-y divide-slate-200 text-sm">
+              {invoice.items.map(item => (
+                <tr key={item.id} className="group">
+                  <td className="py-3.5 pr-3 align-top">
+                    <div className="no-print space-y-1.5">
+                      <select
+                        value={item.category}
+                        onChange={e => {
+                          const cat = e.target.value;
+                          const preset = SERVICE_PRESETS.find(p => p.category === cat);
+                          updateItem(item.id, {
+                            category: cat,
+                            service: preset?.services[0] || 'Service'
+                          });
+                        }}
+                        className="w-full bg-slate-100 text-slate-900 rounded-lg px-2.5 py-1.5 text-xs font-black outline-none"
+                      >
+                        {SERVICE_PRESETS.map(p => (
+                          <option key={p.category} value={p.category}>
+                            {p.category}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="text"
+                        value={item.service}
+                        onChange={e => updateItem(item.id, { service: e.target.value })}
+                        placeholder="Sub-service..."
+                        className="w-full bg-slate-50 border border-slate-200 text-slate-700 rounded-lg px-2.5 py-1 text-xs font-bold outline-none"
                       />
                     </div>
-                    <div className="item-description-print hidden print:block font-bold text-slate-900 text-xs sm:text-sm text-left">
-                      {item.description || 'Product or Service'}
+                    <div className="hidden print:block">
+                      <p className="font-black text-slate-900 text-xs">{item.category}</p>
+                      <p className="text-[11px] font-bold text-slate-500">{item.service}</p>
                     </div>
                   </td>
 
-                  {/* Quantity */}
-                  <td className="py-3.5 px-2 text-center align-middle">
+                  <td className="py-3.5 px-3 align-top">
+                    <div className="no-print flex items-center space-x-1.5">
+                      <input
+                        type="text"
+                        value={item.description}
+                        onChange={e => updateItem(item.id, { description: e.target.value })}
+                        placeholder="Describe scope, deliverables, shoot days..."
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium text-slate-900 outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handlePolish(item)}
+                        disabled={isPolishing === item.id}
+                        title="Polish description with AI (Works Online & Offline)"
+                        className="p-2 bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white rounded-xl transition-all flex-shrink-0"
+                      >
+                        {isPolishing === item.id ? (
+                          <Loader2 size={14} className="animate-spin" />
+                        ) : (
+                          <Sparkles size={14} />
+                        )}
+                      </button>
+                    </div>
+                    <div className="item-description-print hidden print:block text-xs text-slate-800 font-medium">
+                      {item.description || item.service}
+                    </div>
+                  </td>
+
+                  <td className="py-3.5 px-2 text-center align-top">
                     <div className="no-print flex justify-center">
-                      <input 
+                      <input
                         type="number"
                         min="1"
                         value={item.quantity}
-                        onChange={e => updateItem(item.id, {quantity: Math.max(1, parseInt(e.target.value) || 0)})}
-                        className="w-14 text-center font-bold text-slate-900 bg-slate-100 rounded-lg py-1 px-1 outline-none text-xs sm:text-sm focus:ring-2 focus:ring-black"
+                        onChange={e =>
+                          updateItem(item.id, { quantity: Math.max(1, parseInt(e.target.value) || 0) })
+                        }
+                        className="w-16 text-center font-bold text-slate-900 bg-slate-100 rounded-lg py-1.5 px-1 outline-none text-xs"
                       />
                     </div>
-                    <div className="item-qty-print hidden print:block font-bold text-slate-900 text-xs sm:text-sm text-center">
+                    <div className="item-qty-print hidden print:block font-bold text-slate-900 text-xs text-center">
                       {item.quantity}
                     </div>
                   </td>
 
-                  {/* Rate */}
-                  <td className="py-3.5 px-2 text-right align-middle">
+                  <td className="py-3.5 px-2 text-right align-top">
                     <div className="no-print flex justify-end">
-                      <input 
+                      <input
                         type="number"
                         min="0"
                         value={item.rate}
-                        onChange={e => updateItem(item.id, {rate: parseFloat(e.target.value) || 0})}
-                        className="w-24 text-right font-bold bg-slate-100 text-slate-900 rounded-lg py-1 px-2 outline-none text-xs sm:text-sm focus:ring-2 focus:ring-black"
+                        onChange={e => updateItem(item.id, { rate: parseFloat(e.target.value) || 0 })}
+                        className="w-28 text-right font-bold bg-slate-100 text-slate-900 rounded-lg py-1.5 px-2 outline-none text-xs"
                       />
                     </div>
-                    <div className="item-rate-print hidden print:block font-bold text-slate-900 text-xs sm:text-sm text-right">
+                    <div className="item-rate-print hidden print:block font-bold text-slate-900 text-xs text-right">
                       {item.rate.toLocaleString()}
                     </div>
                   </td>
 
-                  {/* Total */}
-                  <td className="py-3.5 pl-2 text-right font-black text-slate-900 align-middle">
+                  <td className="py-3.5 pl-2 text-right font-black text-slate-900 align-top whitespace-nowrap">
                     <span className="text-xs sm:text-sm">{formatCurr(item.quantity * item.rate)}</span>
                   </td>
 
-                  {/* Remove Button */}
-                  <td className="no-print w-8 text-right py-3.5 align-middle">
-                    <button 
-                      onClick={() => setInvoice(p => ({...p, items: p.items.filter(i => i.id !== item.id)}))}
-                      className="p-1 text-slate-300 hover:text-rose-600 rounded-lg transition-all opacity-0 group-hover:opacity-100"
-                      title="Remove item"
+                  <td className="no-print w-10 text-right py-3.5 align-top">
+                    <button
+                      type="button"
+                      onClick={() => removeItem(item.id)}
+                      className="p-1.5 text-rose-500 hover:text-white hover:bg-rose-600 bg-rose-50 rounded-lg transition-all"
+                      title="Delete line item"
                     >
-                      <Trash2 size={15} />
+                      <Trash2 size={14} />
                     </button>
                   </td>
                 </tr>
@@ -697,59 +871,122 @@ ${settings.name || 'Af© ACCOUNTS'}`;
             </tbody>
           </table>
 
-          <button 
-            onClick={addItem} 
-            className="no-print mt-4 flex items-center space-x-2 text-white font-black text-xs uppercase tracking-wider bg-slate-900 hover:bg-slate-800 px-4 py-2.5 rounded-xl transition-all shadow-sm active:scale-98"
+          <button
+            type="button"
+            onClick={addItem}
+            className="no-print mt-4 flex items-center space-x-2 text-white font-black text-xs uppercase tracking-wider bg-slate-900 hover:bg-slate-800 px-4 py-2.5 rounded-xl transition-all shadow-sm"
           >
-            <Plus size={14} /> <span>Add Line Item</span>
+            <Plus size={14} />
+            <span>Add Line Item</span>
           </button>
         </div>
 
-        {/* Footer Notes & Summary Totals (Aligned and crisp) */}
+        {/* Footer Notes & Summary Totals */}
         <div className="flex flex-col md:flex-row justify-between pt-8 border-t-2 border-slate-100 gap-8">
-          {/* Left: Notes & Bank Info */}
           <div className="flex-1 space-y-2">
-             <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">
-               {isQuotation ? 'Quote Terms & Conditions' : 'Payment Instructions & Bank Details'}
-             </label>
-             <textarea 
-                value={invoice.notes} 
-                onChange={e => setInvoice(p => ({...p, notes: e.target.value}))} 
-                className="w-full h-28 bg-slate-50 border border-slate-200 rounded-2xl p-3.5 text-xs font-medium text-slate-700 outline-none no-print focus:ring-2 focus:ring-black leading-relaxed" 
-                placeholder="Payment details, bank transfer instructions, or quote terms..."
-             />
-             <div className="notes-print hidden print:block text-xs text-slate-600 leading-relaxed whitespace-pre-line border-l-2 border-slate-300 pl-3">
-               {invoice.notes}
-             </div>
+            <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">
+              {isQuotation
+                ? 'Quote Terms & Conditions'
+                : isProforma
+                ? 'Proforma Validity & Advance Payment Terms'
+                : 'Payment Instructions & Bank Details'}
+            </label>
+            <textarea
+              value={invoice.notes}
+              onChange={e => setInvoice(p => ({ ...p, notes: e.target.value }))}
+              className="w-full h-28 bg-slate-50 border border-slate-200 rounded-2xl p-3.5 text-xs font-medium text-slate-700 outline-none no-print focus:ring-2 focus:ring-indigo-500 leading-relaxed"
+              placeholder="Payment details, bank transfer instructions, or proforma terms..."
+            />
+            <div className="notes-print hidden print:block text-xs text-slate-600 leading-relaxed whitespace-pre-line border-l-2 border-slate-300 pl-3">
+              {invoice.notes}
+            </div>
           </div>
 
-          {/* Right: Summary Totals */}
           <div className="w-full md:w-80 space-y-3 text-right">
-             <div className="flex justify-between items-center text-slate-500 font-bold text-xs uppercase tracking-wider">
-                <span>Subtotal</span>
-                <span className="text-slate-900 font-black text-sm">{formatCurr(subtotal)}</span>
-             </div>
-             <div className="flex justify-between items-center text-slate-500 font-bold text-xs uppercase tracking-wider">
-                <span>VAT / Tax ({invoice.taxRate}%)</span>
-                <span className="text-slate-900 font-black text-sm">{formatCurr(tax)}</span>
-             </div>
-             <div className={`flex justify-between items-end pt-4 border-t-2 ${isQuotation ? 'border-slate-400' : 'border-slate-900'}`}>
-                <div>
-                  <span className="font-black text-slate-900 text-sm md:text-base tracking-tight uppercase block text-left">
-                    {isQuotation ? 'Total Quote' : 'Total Amount Due'}
-                  </span>
-                </div>
-                <div className="text-right">
-                  <span className={`text-2xl md:text-3xl font-black tracking-tight leading-none ${isQuotation ? 'text-slate-800' : 'text-indigo-600'}`}>
-                    {formatCurr(total)}
-                  </span>
-                </div>
-             </div>
+            <div className="flex justify-between items-center text-slate-500 font-bold text-xs uppercase tracking-wider">
+              <span>Subtotal</span>
+              <span className="text-slate-900 font-black text-sm">{formatCurr(subtotal)}</span>
+            </div>
+            <div className="flex justify-between items-center text-slate-500 font-bold text-xs uppercase tracking-wider">
+              <span>VAT / Tax ({invoice.taxRate}%)</span>
+              <span className="text-slate-900 font-black text-sm">{formatCurr(tax)}</span>
+            </div>
+            <div
+              className={`flex justify-between items-end pt-4 border-t-2 ${
+                isQuotation
+                  ? 'border-amber-500'
+                  : isProforma
+                  ? 'border-purple-600'
+                  : 'border-slate-900'
+              }`}
+            >
+              <div>
+                <span className="font-black text-slate-900 text-sm md:text-base tracking-tight uppercase block text-left">
+                  {isQuotation
+                    ? 'Total Quote'
+                    : isProforma
+                    ? 'Total Proforma'
+                    : 'Total Amount Due'}
+                </span>
+              </div>
+              <div className="text-right">
+                <span
+                  className={`text-2xl md:text-3xl font-black tracking-tight leading-none ${
+                    isQuotation
+                      ? 'text-amber-600'
+                      : isProforma
+                      ? 'text-purple-600'
+                      : 'text-indigo-600'
+                  }`}
+                >
+                  {formatCurr(total)}
+                </span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* MODAL 1: SEND EMAIL MODAL */}
+      {/* DELETE CONFIRMATION MODAL INSIDE BUILDER */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800 animate-in zoom-in-95 duration-200">
+            <div className="flex items-center space-x-3 mb-4">
+              <div className="w-11 h-11 rounded-2xl bg-rose-100 dark:bg-rose-950 text-rose-600 flex items-center justify-center">
+                <Trash2 size={22} />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-900 dark:text-white">
+                  Delete #{invoice.id}?
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  This will permanently delete this document and return to the invoice list.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2.5 mt-6">
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                className="px-4 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-xs"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  setShowDeleteConfirm(false);
+                  if (onDelete) onDelete(invoice.id);
+                }}
+                className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-black text-xs flex items-center space-x-1.5"
+              >
+                <Trash2 size={14} />
+                <span>Yes, Delete Document</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SEND EMAIL MODAL */}
       {isEmailModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-in zoom-in-95 duration-200 flex flex-col max-h-[90vh]">
@@ -759,14 +996,11 @@ ${settings.name || 'Af© ACCOUNTS'}`;
                   <Mail size={18} />
                 </div>
                 <div>
-                  <h2 className="text-base font-black text-slate-900 dark:text-white">Send Invoice via Email</h2>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">Pre-formatted billing statement sent to saved client email</p>
+                  <h2 className="text-base font-black text-slate-900 dark:text-white">Send Document via Email</h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">Pre-formatted statement with {currSym} breakdown</p>
                 </div>
               </div>
-              <button 
-                onClick={() => setIsEmailModalOpen(false)} 
-                className="text-slate-400 hover:text-slate-600 p-1.5"
-              >
+              <button onClick={() => setIsEmailModalOpen(false)} className="text-slate-400 hover:text-slate-600 p-1.5">
                 <X size={20} />
               </button>
             </div>
@@ -779,7 +1013,6 @@ ${settings.name || 'Af© ACCOUNTS'}`;
                 </div>
               )}
 
-              {/* Recipient */}
               <div className="space-y-1">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Client Email Address *</label>
                 <input
@@ -792,7 +1025,6 @@ ${settings.name || 'Af© ACCOUNTS'}`;
                 />
               </div>
 
-              {/* Subject */}
               <div className="space-y-1">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Subject Line</label>
                 <input
@@ -802,7 +1034,6 @@ ${settings.name || 'Af© ACCOUNTS'}`;
                 />
               </div>
 
-              {/* Message Body */}
               <div className="space-y-1">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Email Content & Breakdown</label>
                 <textarea
@@ -826,7 +1057,7 @@ ${settings.name || 'Af© ACCOUNTS'}`;
               <div className="flex items-center space-x-2">
                 <button
                   onClick={handleSendViaMailClient}
-                  className="flex items-center space-x-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-200 px-4 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider"
+                  className="flex items-center space-x-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-200 px-4 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider"
                 >
                   <ExternalLink size={14} />
                   <span>Open in Mail App</span>
@@ -835,10 +1066,10 @@ ${settings.name || 'Af© ACCOUNTS'}`;
                 <button
                   onClick={handleAutomatedSend}
                   disabled={isSendingEmail}
-                  className="flex items-center space-x-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider shadow-lg shadow-indigo-200 dark:shadow-none transition-all disabled:opacity-50"
+                  className="flex items-center space-x-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider shadow-lg transition-all disabled:opacity-50"
                 >
                   {isSendingEmail ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-                  <span>{isSendingEmail ? 'Sending...' : 'Send Invoice'}</span>
+                  <span>{isSendingEmail ? 'Sending...' : 'Send'}</span>
                 </button>
               </div>
             </div>
@@ -846,14 +1077,14 @@ ${settings.name || 'Af© ACCOUNTS'}`;
         </div>
       )}
 
-      {/* MODAL 2: FULL QUICK CLIENT REGISTRATION */}
+      {/* QUICK CLIENT REGISTRATION MODAL */}
       {isAddingClient && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-in zoom-in-95 duration-200 flex flex-col max-h-[90vh]">
             <div className="p-6 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center bg-slate-50 dark:bg-slate-800/40">
               <div>
                 <h2 className="text-base font-black text-slate-900 dark:text-white">Quick Add Client</h2>
-                <p className="text-xs text-slate-500 dark:text-slate-400">Add company TRN, billing address, and contact details to select immediately.</p>
+                <p className="text-xs text-slate-500 dark:text-slate-400">Add company TRN, billing address, and contact details.</p>
               </div>
               <button onClick={() => setIsAddingClient(false)} className="text-slate-400 hover:text-slate-600 p-1.5">
                 <X size={20} />
@@ -932,7 +1163,7 @@ ${settings.name || 'Af© ACCOUNTS'}`;
                   type="submit"
                   className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white py-3 rounded-xl font-bold text-xs uppercase tracking-wider shadow-lg"
                 >
-                  Save & Apply to Invoice
+                  Save & Apply
                 </button>
                 <button
                   type="button"

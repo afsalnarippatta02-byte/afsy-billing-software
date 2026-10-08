@@ -43,7 +43,7 @@ import {
 } from 'lucide-react';
 import { downloadElementAsPdf, printElementDirectly, downloadDocumentAsHtml } from '../utils/pdfExport';
 import { LanguageCode, getTranslation } from '../utils/translations';
-import { isInvoiceOverdue } from '../utils/currency';
+import { isInvoiceOverdue, getCurrencySymbol } from '../utils/currency';
 
 interface StatementsProps {
   invoices: Invoice[];
@@ -130,7 +130,7 @@ export const Statements: React.FC<StatementsProps> = ({
     () => (selectedClientId === 'ALL' ? null : clients.find(c => c.id === selectedClientId) || null),
     [clients, selectedClientId]
   );
-  const currencySymbol = settings?.defaultCurrency || 'AED';
+  const currencySymbol = getCurrencySymbol(settings?.defaultCurrency || 'AED');
 
   const formatDate = (dateStr: string) => {
     if (!dateStr) return '';
