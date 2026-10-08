@@ -40,9 +40,11 @@ import {
   RefreshCw,
   AlertTriangle,
   FileCode,
-  Smartphone
+  Smartphone,
+  PenTool
 } from 'lucide-react';
 import UserManagementSettings from './UserManagementSettings';
+import SignatureSealSettingsSection from './SignatureSealSettingsSection';
 import { 
   gatherAppBackupPayload, 
   downloadLocalBackupJSON, 
@@ -129,7 +131,7 @@ export const Settings: React.FC<SettingsProps> = ({
   onRestoreData,
   language = 'en'
 }) => {
-  const [activeTab, setActiveTab] = useState<'company' | 'users' | 'backup'>('company');
+  const [activeTab, setActiveTab] = useState<'company' | 'signature' | 'users' | 'backup'>('company');
   const [formData, setFormData] = useState<CompanySettings>(settings);
   const [isSavedModalOpen, setIsSavedModalOpen] = useState(false);
   const [saveToast, setSaveToast] = useState<{ show: boolean; msg?: string; type?: 'success' | 'error' }>({ show: false });
@@ -678,6 +680,19 @@ export const Settings: React.FC<SettingsProps> = ({
 
         <button
           type="button"
+          onClick={() => setActiveTab('signature')}
+          className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${
+            activeTab === 'signature'
+              ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-white/50 dark:hover:bg-slate-700/50'
+          }`}
+        >
+          <PenTool size={16} className={activeTab === 'signature' ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400'} />
+          <span>Signature &amp; Seal</span>
+        </button>
+
+        <button
+          type="button"
           onClick={() => setActiveTab('users')}
           className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${
             activeTab === 'users'
@@ -702,6 +717,32 @@ export const Settings: React.FC<SettingsProps> = ({
           <span>{t('settings.backup_tab', 'Google Drive & Backup Center')}</span>
         </button>
       </div>
+
+      {/* ========================================================================= */}
+      {/* TAB: SIGNATURE & SEAL TAB */}
+      {/* ========================================================================= */}
+      {activeTab === 'signature' && (
+        <form onSubmit={handleSave} className="space-y-6 animate-in fade-in">
+          <SignatureSealSettingsSection
+            formData={formData}
+            onFieldChange={handleFieldChange}
+            onSaveToast={(msg, type = 'success') => {
+              setSaveToast({ show: true, msg, type });
+              setTimeout(() => setSaveToast({ show: false }), 3500);
+            }}
+          />
+          <div className="flex justify-end">
+            <button
+              type="submit"
+              disabled={isSaving}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3.5 rounded-2xl font-black text-xs shadow-lg flex items-center gap-2 transition-all active:scale-95"
+            >
+              <Save size={16} />
+              <span>{isSaving ? 'Saving Signature & Seal...' : 'Save Signature & Seal Settings'}</span>
+            </button>
+          </div>
+        </form>
+      )}
 
       {/* ========================================================================= */}
       {/* TAB 1: USERS TAB */}
@@ -1307,6 +1348,16 @@ export const Settings: React.FC<SettingsProps> = ({
             </div>
           </div>
         </div>
+
+        {/* SECTION 2B: AUTHORIZED SIGNATURE & OFFICIAL COMPANY SEAL */}
+        <SignatureSealSettingsSection
+          formData={formData}
+          onFieldChange={handleFieldChange}
+          onSaveToast={(msg, type = 'success') => {
+            setSaveToast({ show: true, msg, type });
+            setTimeout(() => setSaveToast({ show: false }), 3500);
+          }}
+        />
 
         {/* SECTION 3: BILLING, VAT & BANK DEFAULTS */}
         <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm p-6 sm:p-8 space-y-6">

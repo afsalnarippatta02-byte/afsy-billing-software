@@ -24,7 +24,9 @@ import {
   Loader2,
   CheckCircle2,
   FileBadge,
-  AlertTriangle
+  AlertTriangle,
+  PenTool,
+  Stamp
 } from 'lucide-react';
 import { Invoice, InvoiceStatus, LineItem, Client, CompanySettings, UserRole, PaymentMethod } from '../types';
 import { SERVICE_PRESETS } from '../constants';
@@ -118,6 +120,8 @@ export const InvoiceBuilder: React.FC<InvoiceBuilderProps> = ({
     currency: settings.defaultCurrency || 'AED',
     discount: 0,
     paymentMethod: PaymentMethod.BANK_TRANSFER,
+    includeSignature: settings.autoApplySignature ?? Boolean(settings.signatureUrl),
+    includeSeal: settings.autoApplySeal ?? Boolean(settings.companySealUrl),
     notes:
       initialDocumentType === 'PROFORMA'
         ? `Proforma Invoice valid for 15 days. 50% mobilization advance requested prior to production.\nBank: ${settings.bankName || 'Emirates NBD'} | IBAN: ${settings.iban || 'AE0000000000000'}`
@@ -155,7 +159,15 @@ export const InvoiceBuilder: React.FC<InvoiceBuilderProps> = ({
       if (found) {
         setInvoice({
           ...found,
-          paymentMethod: found.paymentMethod || PaymentMethod.BANK_TRANSFER
+          paymentMethod: found.paymentMethod || PaymentMethod.BANK_TRANSFER,
+          includeSignature:
+            found.includeSignature !== undefined
+              ? found.includeSignature
+              : settings.autoApplySignature ?? Boolean(settings.signatureUrl),
+          includeSeal:
+            found.includeSeal !== undefined
+              ? found.includeSeal
+              : settings.autoApplySeal ?? Boolean(settings.companySealUrl)
         });
       }
     }
@@ -440,6 +452,39 @@ ${settings.email || ''}`;
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {/* Separate Enable / Disable Signature & Seal Toggles */}
+            <button
+              type="button"
+              onClick={() =>
+                setInvoice(prev => ({ ...prev, includeSignature: !prev.includeSignature }))
+              }
+              className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl font-bold text-xs border transition-all ${
+                invoice.includeSignature
+                  ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-500 border-slate-200 dark:border-slate-700'
+              }`}
+              title="Enable or Disable Authorized Signature on this document"
+            >
+              <PenTool size={13} />
+              <span>Sig: {invoice.includeSignature ? 'On' : 'Off'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() =>
+                setInvoice(prev => ({ ...prev, includeSeal: !prev.includeSeal }))
+              }
+              className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl font-bold text-xs border transition-all ${
+                invoice.includeSeal
+                  ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-500 border-slate-200 dark:border-slate-700'
+              }`}
+              title="Enable or Disable Official Company Seal on this document"
+            >
+              <Stamp size={13} />
+              <span>Seal: {invoice.includeSeal ? 'On' : 'Off'}</span>
+            </button>
+
             {(isQuotation || isProforma) && (
               <button
                 onClick={() => switchDocumentMode('INVOICE')}
@@ -941,6 +986,37 @@ ${settings.email || ''}`;
                 >
                   {formatCurr(total)}
                 </span>
+              </div>
+            </div>
+
+            {/* Auto-Applied Authorized Signature & Official Company Seal Block */}
+            <div className="pt-6 flex flex-col items-end space-y-2 text-right">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-700">
+                For {settings.name || 'AF© ACCOUNTS'}
+              </p>
+              <div className="min-h-[68px] flex items-center justify-end gap-4 py-1">
+                {invoice.includeSeal && settings.companySealUrl && (
+                  <img
+                    src={settings.companySealUrl}
+                    alt="Official Company Seal"
+                    className="h-20 w-20 object-contain opacity-95"
+                  />
+                )}
+                {invoice.includeSignature && settings.signatureUrl && (
+                  <img
+                    src={settings.signatureUrl}
+                    alt="Authorized Signature"
+                    className="h-14 max-w-[160px] object-contain"
+                  />
+                )}
+              </div>
+              <div className="w-48 border-t border-slate-300 pt-1.5">
+                <p className="text-xs font-bold text-slate-900">
+                  {settings.signatoryName || 'Authorized Signatory'}
+                </p>
+                {settings.signatoryTitle && (
+                  <p className="text-[10px] text-slate-500">{settings.signatoryTitle}</p>
+                )}
               </div>
             </div>
           </div>

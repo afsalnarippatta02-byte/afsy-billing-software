@@ -115,6 +115,8 @@ export interface LineItem {
   id: string;
   description: string;
   serviceType: ProjectType;
+  category?: string;
+  service?: string;
   quantity: number;
   rate: number;
 }
@@ -133,6 +135,8 @@ export interface Invoice {
   discount: number;
   paymentMethod?: PaymentMethod;
   paymentDate?: string;
+  includeSignature?: boolean;
+  includeSeal?: boolean;
 }
 
 export interface Expense {
@@ -170,7 +174,14 @@ export interface CompanySettings {
   phone?: string;
   bankName?: string;
   bankAccount?: string;
+  bankDetails?: string;
   invoiceFooterNote?: string;
+  signatureUrl?: string;
+  companySealUrl?: string;
+  signatoryName?: string;
+  signatoryTitle?: string;
+  autoApplySignature?: boolean;
+  autoApplySeal?: boolean;
   driveSyncEmail?: string;
   autoDriveSync?: boolean;
   lastDriveSync?: string;

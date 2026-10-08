@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Invoice,
   Client,
@@ -18,7 +18,9 @@ import {
   ExternalLink,
   Check,
   ShieldCheck,
-  X
+  X,
+  PenTool,
+  Stamp
 } from 'lucide-react';
 import { downloadElementAsPdf, printElementDirectly } from '../utils/pdfExport';
 import { LanguageCode, getTranslation } from '../utils/translations';
@@ -41,19 +43,19 @@ type StatementViewMode = 'date_wise' | 'month_wise' | 'category_wise';
 type LedgerSourceMode = 'invoices' | 'expenses';
 
 const MONTHS = [
-  { value: 'ALL', label: 'All Months' },
-  { value: '0', label: 'January' },
-  { value: '1', label: 'February' },
-  { value: '2', label: 'March' },
-  { value: '3', label: 'April' },
-  { value: '4', label: 'May' },
-  { value: '5', label: 'June' },
-  { value: '6', label: 'July' },
-  { value: '7', label: 'August' },
-  { value: '8', label: 'September' },
-  { value: '9', label: 'October' },
-  { value: '10', label: 'November' },
-  { value: '11', label: 'December' }
+  { value: 'ALL', label: 'All Months', short: '' },
+  { value: '0', label: 'January', short: 'Jan' },
+  { value: '1', label: 'February', short: 'Feb' },
+  { value: '2', label: 'March', short: 'Mar' },
+  { value: '3', label: 'April', short: 'Apr' },
+  { value: '4', label: 'May', short: 'May' },
+  { value: '5', label: 'June', short: 'Jun' },
+  { value: '6', label: 'July', short: 'Jul' },
+  { value: '7', label: 'August', short: 'Aug' },
+  { value: '8', label: 'September', short: 'Sep' },
+  { value: '9', label: 'October', short: 'Oct' },
+  { value: '10', label: 'November', short: 'Nov' },
+  { value: '11', label: 'December', short: 'Dec' }
 ];
 
 export const Statements: React.FC<StatementsProps> = ({
@@ -79,6 +81,24 @@ export const Statements: React.FC<StatementsProps> = ({
   const [viewMode, setViewMode] = useState<StatementViewMode>('date_wise');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
+  // Separate Enable / Disable Auto-Apply States for Signature & Seal (synced with Settings)
+  const [applySignature, setApplySignature] = useState<boolean>(
+    () => settings?.autoApplySignature ?? Boolean(settings?.signatureUrl)
+  );
+  const [applySeal, setApplySeal] = useState<boolean>(
+    () => settings?.autoApplySeal ?? Boolean(settings?.companySealUrl)
+  );
+
+  useEffect(() => {
+    setApplySignature(settings?.autoApplySignature ?? Boolean(settings?.signatureUrl));
+    setApplySeal(settings?.autoApplySeal ?? Boolean(settings?.companySealUrl));
+  }, [
+    settings?.autoApplySignature,
+    settings?.autoApplySeal,
+    settings?.signatureUrl,
+    settings?.companySealUrl
+  ]);
+
   // Export & Certificate Modal State
   const [isExportingPdf, setIsExportingPdf] = useState<boolean>(false);
   const [showCertificateModal, setShowCertificateModal] = useState<boolean>(false);
@@ -92,11 +112,16 @@ export const Statements: React.FC<StatementsProps> = ({
     [clients, selectedClientId]
   );
 
-  const formatDate = (dateStr?: string) => {
+  // Format date clearly as Date Month Year (e.g., "08 Oct 2026")
+  const formatDateMonthYear = (dateStr?: string) => {
     if (!dateStr) return '—';
     const parts = dateStr.split('-');
     if (parts.length === 3) {
-      return `${parts[2]}/${parts[1]}/${parts[0]}`;
+      const year = parts[0];
+      const monthIdx = parseInt(parts[1], 10) - 1;
+      const day = parts[2].padStart(2, '0');
+      const monthShort = MONTHS[monthIdx + 1]?.short || parts[1];
+      return `${day} ${monthShort} ${year}`;
     }
     return dateStr;
   };
@@ -210,13 +235,12 @@ export const Statements: React.FC<StatementsProps> = ({
     return true;
   };
 
-  // Filtered & Chronologically Sorted Invoices (Oldest to Newest for proper accounting ledger running balance)
+  // Filtered & Chronologically Sorted Invoices (Oldest to Newest for proper accounting ledger)
   const filteredInvoices = useMemo(() => {
     if (ledgerSource !== 'invoices') return [];
 
     return invoices
       .filter(inv => {
-        // Standard Statement of Account includes issued Invoices (excludes Drafts/Quotations/Proforma)
         if (
           inv.status === InvoiceStatus.QUOTATION ||
           inv.status === InvoiceStatus.PROFORMA ||
@@ -309,7 +333,7 @@ export const Statements: React.FC<StatementsProps> = ({
     searchQuery
   ]);
 
-  // Standard Accounting Ledger Rows with Running Balance
+  // Standard Accounting Ledger Rows
   const ledgerRows = useMemo(() => {
     if (ledgerSource === 'expenses') {
       let runningTotal = 0;
@@ -362,64 +386,34 @@ export const Statements: React.FC<StatementsProps> = ({
     });
   }, [ledgerSource, filteredInvoices, filteredExpenses, clients, selectedCategory]);
 
-  // Summary Totals & Aging Breakdown (Standard Statement of Account Metrics)
+  // Summary Totals
   const summary = useMemo(() => {
     let totalInvoiced = 0;
     let totalPaid = 0;
     let totalBalance = 0;
 
-    // Aging buckets for unpaid balance
-    let agingCurrent = 0;
-    let aging1to30 = 0;
-    let aging31to60 = 0;
-    let aging61to90 = 0;
-    let aging90Plus = 0;
-
-    const today = new Date();
-
     ledgerRows.forEach(row => {
       totalInvoiced += row.debitAmount;
       totalPaid += row.creditAmount;
       totalBalance += row.balanceAmount;
-
-      if (row.balanceAmount > 0) {
-        const due = row.dueDate ? new Date(row.dueDate + 'T00:00:00') : new Date(row.date + 'T00:00:00');
-        const diffDays = Math.floor((today.getTime() - due.getTime()) / (1000 * 60 * 60 * 24));
-        if (diffDays <= 0) {
-          agingCurrent += row.balanceAmount;
-        } else if (diffDays <= 30) {
-          aging1to30 += row.balanceAmount;
-        } else if (diffDays <= 60) {
-          aging31to60 += row.balanceAmount;
-        } else if (diffDays <= 90) {
-          aging61to90 += row.balanceAmount;
-        } else {
-          aging90Plus += row.balanceAmount;
-        }
-      }
     });
 
     return {
       count: ledgerRows.length,
       totalInvoiced,
       totalPaid,
-      totalBalance,
-      agingCurrent,
-      aging1to30,
-      aging31to60,
-      aging61to90,
-      aging90Plus
+      totalBalance
     };
   }, [ledgerRows]);
 
-  // Month-Wise Summary Grouping
-  const monthWiseRows = useMemo(() => {
+  // Month-Wise Grouped Sections (preserving individual rows with full Date-Month-Year under "Invoice Date")
+  const monthWiseGroups = useMemo(() => {
     const map = new Map<
       string,
       {
         monthKey: string;
         monthLabel: string;
-        count: number;
+        rows: typeof ledgerRows;
         invoiced: number;
         paid: number;
         balance: number;
@@ -432,18 +426,18 @@ export const Statements: React.FC<StatementsProps> = ({
       const mIdx = isNaN(d.getTime()) ? 0 : d.getMonth();
       const key = `${y}-${String(mIdx + 1).padStart(2, '0')}`;
       const label = isNaN(d.getTime())
-        ? row.date
+        ? formatDateMonthYear(row.date)
         : `${MONTHS[mIdx + 1]?.label || ''} ${y}`;
 
       const curr = map.get(key) || {
         monthKey: key,
         monthLabel: label,
-        count: 0,
+        rows: [],
         invoiced: 0,
         paid: 0,
         balance: 0
       };
-      curr.count += 1;
+      curr.rows.push(row);
       curr.invoiced += row.debitAmount;
       curr.paid += row.creditAmount;
       curr.balance += row.balanceAmount;
@@ -453,12 +447,13 @@ export const Statements: React.FC<StatementsProps> = ({
     return Array.from(map.values()).sort((a, b) => a.monthKey.localeCompare(b.monthKey));
   }, [ledgerRows]);
 
-  // Category-Wise Summary Grouping
+  // Category-Wise Grouped Sections (also showing full Date-Month-Year under "Invoice Date")
   const categoryWiseRows = useMemo(() => {
     const map = new Map<
       string,
       {
         category: string;
+        latestDate: string;
         count: number;
         invoiced: number;
         paid: number;
@@ -470,12 +465,14 @@ export const Statements: React.FC<StatementsProps> = ({
       const cat = row.category || 'General Services';
       const curr = map.get(cat) || {
         category: cat,
+        latestDate: row.date,
         count: 0,
         invoiced: 0,
         paid: 0,
         balance: 0
       };
       curr.count += 1;
+      curr.latestDate = row.date;
       curr.invoiced += row.debitAmount;
       curr.paid += row.creditAmount;
       curr.balance += row.balanceAmount;
@@ -489,7 +486,9 @@ export const Statements: React.FC<StatementsProps> = ({
   const periodLabel = useMemo(() => {
     if (periodMode === 'all') {
       if (ledgerRows.length > 0) {
-        return `${formatDate(ledgerRows[0].date)} to ${formatDate(ledgerRows[ledgerRows.length - 1].date)}`;
+        return `${formatDateMonthYear(ledgerRows[0].date)} to ${formatDateMonthYear(
+          ledgerRows[ledgerRows.length - 1].date
+        )}`;
       }
       return 'All Dates';
     }
@@ -498,15 +497,15 @@ export const Statements: React.FC<StatementsProps> = ({
       return `${MONTHS[now.getMonth() + 1]?.label} ${now.getFullYear()}`;
     }
     if (periodMode === 'this_year') {
-      return `Jan – Dec ${new Date().getFullYear()}`;
+      return `01 Jan ${new Date().getFullYear()} – 31 Dec ${new Date().getFullYear()}`;
     }
     if (periodMode === 'month') {
       const mName = MONTHS.find(m => m.value === selectedMonth)?.label || 'All Months';
       return `${mName} ${selectedYear}`;
     }
     if (periodMode === 'date_range') {
-      const from = startDate ? formatDate(startDate) : 'Beginning';
-      const to = endDate ? formatDate(endDate) : 'Today';
+      const from = startDate ? formatDateMonthYear(startDate) : 'Beginning';
+      const to = endDate ? formatDateMonthYear(endDate) : 'Today';
       return `${from} – ${to}`;
     }
     return 'All Dates';
@@ -572,7 +571,7 @@ export const Statements: React.FC<StatementsProps> = ({
       : 'All_Clients';
 
     const headers = [
-      'Date',
+      'Invoice Date',
       'Reference #',
       'Client / Party',
       'Category',
@@ -584,7 +583,7 @@ export const Statements: React.FC<StatementsProps> = ({
     ];
 
     const rows = ledgerRows.map(r => [
-      formatDate(r.date),
+      `"${formatDateMonthYear(r.date)}"`,
       r.refNumber,
       `"${r.partyName.replace(/"/g, '""')}"`,
       `"${r.category.replace(/"/g, '""')}"`,
@@ -660,6 +659,35 @@ export const Statements: React.FC<StatementsProps> = ({
 
           {/* Export / Print Actions */}
           <div className="flex flex-wrap items-center gap-2">
+            {/* Separate & Combined Signature + Seal Quick Toggles */}
+            <button
+              type="button"
+              onClick={() => setApplySignature(!applySignature)}
+              className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border transition-colors ${
+                applySignature
+                  ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-500 border-slate-200 dark:border-slate-700'
+              }`}
+              title="Enable or Disable Authorized Signature on Statement"
+            >
+              <PenTool size={13} />
+              <span>Signature: {applySignature ? 'On' : 'Off'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setApplySeal(!applySeal)}
+              className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border transition-colors ${
+                applySeal
+                  ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-500 border-slate-200 dark:border-slate-700'
+              }`}
+              title="Enable or Disable Official Company Seal on Statement"
+            >
+              <Stamp size={13} />
+              <span>Seal: {applySeal ? 'On' : 'Off'}</span>
+            </button>
+
             {ledgerSource === 'invoices' && summary.totalBalance === 0 && summary.count > 0 && (
               <button
                 type="button"
@@ -734,7 +762,7 @@ export const Statements: React.FC<StatementsProps> = ({
             >
               <option value="all">All Dates</option>
               <option value="this_month">This Month</option>
-              <option value="month">Select Month & Year</option>
+              <option value="month">Select Month &amp; Year</option>
               <option value="date_range">Custom Date Range</option>
               <option value="this_year">This Year ({new Date().getFullYear()})</option>
             </select>
@@ -799,7 +827,7 @@ export const Statements: React.FC<StatementsProps> = ({
               className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
             >
               <option value="date_wise">Date-Wise Standard Ledger</option>
-              <option value="month_wise">Month-Wise Summary</option>
+              <option value="month_wise">Month-Wise Grouped Ledger</option>
               <option value="category_wise">Category-Wise Summary</option>
             </select>
           </div>
@@ -945,7 +973,7 @@ export const Statements: React.FC<StatementsProps> = ({
               <p>
                 <span className="font-semibold text-slate-500">Statement Date:</span>{' '}
                 <span className="font-bold text-slate-900">
-                  {formatDate(new Date().toISOString().split('T')[0])}
+                  {formatDateMonthYear(new Date().toISOString().split('T')[0])}
                 </span>
               </p>
               <p>
@@ -1052,14 +1080,14 @@ export const Statements: React.FC<StatementsProps> = ({
           </div>
         </div>
 
-        {/* 3. STATEMENT TABLE — ADAPTS CLEANLY TO DATE-WISE, MONTH-WISE, OR CATEGORY-WISE */}
+        {/* 3. STATEMENT TABLE — HEADING IS "INVOICE DATE" AND SHOWS FULL DATE MONTH YEAR */}
         {viewMode === 'date_wise' && (
           <div className="space-y-2">
             <div className="overflow-x-auto border border-slate-300 rounded-lg">
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-slate-900 text-white text-[11px] font-bold uppercase tracking-wider">
-                    <th className="py-2.5 px-3 border-r border-slate-700 w-24">Date</th>
+                    <th className="py-2.5 px-3 border-r border-slate-700 w-32">Invoice Date</th>
                     <th className="py-2.5 px-3 border-r border-slate-700 w-28">Invoice / Ref</th>
                     {selectedClientId === 'ALL' && (
                       <th className="py-2.5 px-3 border-r border-slate-700">Client / Party</th>
@@ -1102,8 +1130,8 @@ export const Statements: React.FC<StatementsProps> = ({
                           row.rawInvoice && onSelectInvoice ? 'cursor-pointer' : ''
                         }`}
                       >
-                        <td className="py-2.5 px-3 border-r border-slate-200 font-medium text-slate-700 whitespace-nowrap tabular-nums">
-                          {formatDate(row.date)}
+                        <td className="py-2.5 px-3 border-r border-slate-200 font-semibold text-slate-800 whitespace-nowrap tabular-nums">
+                          {formatDateMonthYear(row.date)}
                         </td>
                         <td className="py-2.5 px-3 border-r border-slate-200 font-bold text-slate-900 whitespace-nowrap">
                           <div className="flex items-center justify-between gap-1">
@@ -1194,62 +1222,122 @@ export const Statements: React.FC<StatementsProps> = ({
           </div>
         )}
 
-        {/* MONTH-WISE SUMMARY TABLE */}
+        {/* MONTH-WISE GROUPED TABLE — HEADING IS "INVOICE DATE" AND ROWS SHOW FULL DATE MONTH YEAR */}
         {viewMode === 'month_wise' && (
           <div className="overflow-x-auto border border-slate-300 rounded-lg">
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-900 text-white text-[11px] font-bold uppercase tracking-wider">
-                  <th className="py-2.5 px-4 border-r border-slate-700">Month & Year</th>
-                  <th className="py-2.5 px-4 border-r border-slate-700 text-center">
-                    Transactions
+                  <th className="py-2.5 px-4 border-r border-slate-700 w-32">Invoice Date</th>
+                  <th className="py-2.5 px-4 border-r border-slate-700 w-28">Invoice / Ref</th>
+                  {selectedClientId === 'ALL' && (
+                    <th className="py-2.5 px-4 border-r border-slate-700">Client / Party</th>
+                  )}
+                  <th className="py-2.5 px-4 border-r border-slate-700">Particulars / Category</th>
+                  <th className="py-2.5 px-4 border-r border-slate-700 text-center w-24">Status</th>
+                  <th className="py-2.5 px-4 border-r border-slate-700 text-right w-28">
+                    Invoiced ({currencySymbol})
                   </th>
-                  <th className="py-2.5 px-4 border-r border-slate-700 text-right">
-                    Total Invoiced ({currencySymbol})
+                  <th className="py-2.5 px-4 border-r border-slate-700 text-right w-28">
+                    Paid ({currencySymbol})
                   </th>
-                  <th className="py-2.5 px-4 border-r border-slate-700 text-right">
-                    Paid Amount ({currencySymbol})
-                  </th>
-                  <th className="py-2.5 px-4 text-right">
-                    Unpaid Balance ({currencySymbol})
+                  <th className="py-2.5 px-4 text-right w-32">
+                    Balance ({currencySymbol})
                   </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 text-xs">
-                {monthWiseRows.length === 0 ? (
+                {monthWiseGroups.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="py-10 text-center text-slate-400 font-medium">
+                    <td
+                      colSpan={selectedClientId === 'ALL' ? 8 : 7}
+                      className="py-10 text-center text-slate-400 font-medium"
+                    >
                       No monthly records found for the selected criteria.
                     </td>
                   </tr>
                 ) : (
-                  monthWiseRows.map((m, idx) => (
-                    <tr key={m.monthKey} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/60'}>
-                      <td className="py-2.5 px-4 border-r border-slate-200 font-bold text-slate-900">
-                        {m.monthLabel}
-                      </td>
-                      <td className="py-2.5 px-4 border-r border-slate-200 text-center font-semibold text-slate-700 tabular-nums">
-                        {m.count}
-                      </td>
-                      <td className="py-2.5 px-4 border-r border-slate-200 text-right font-semibold text-slate-900 tabular-nums">
-                        {formatAmount(m.invoiced)}
-                      </td>
-                      <td className="py-2.5 px-4 border-r border-slate-200 text-right font-semibold text-emerald-700 tabular-nums">
-                        {formatAmount(m.paid)}
-                      </td>
-                      <td className="py-2.5 px-4 text-right font-bold text-slate-900 tabular-nums">
-                        {formatAmount(m.balance)}
-                      </td>
-                    </tr>
+                  monthWiseGroups.map(group => (
+                    <React.Fragment key={group.monthKey}>
+                      {/* Month Group Subheader */}
+                      <tr className="bg-slate-100/90 font-black text-slate-800">
+                        <td
+                          colSpan={selectedClientId === 'ALL' ? 5 : 4}
+                          className="py-2 px-4 border-r border-slate-200 uppercase tracking-wider text-[11px]"
+                        >
+                          {group.monthLabel} ({group.rows.length}{' '}
+                          {group.rows.length === 1 ? 'Invoice' : 'Invoices'})
+                        </td>
+                        <td className="py-2 px-4 border-r border-slate-200 text-right tabular-nums">
+                          {formatAmount(group.invoiced)}
+                        </td>
+                        <td className="py-2 px-4 border-r border-slate-200 text-right text-emerald-700 tabular-nums">
+                          {formatAmount(group.paid)}
+                        </td>
+                        <td className="py-2 px-4 text-right tabular-nums">
+                          {formatAmount(group.balance)}
+                        </td>
+                      </tr>
+                      {/* Individual Invoices in that Month showing full Date Month Year */}
+                      {group.rows.map(row => (
+                        <tr
+                          key={row.id}
+                          onClick={() => row.rawInvoice && onSelectInvoice && onSelectInvoice(row.id)}
+                          className="bg-white hover:bg-indigo-50/40 transition-colors cursor-pointer"
+                        >
+                          <td className="py-2.5 px-4 border-r border-slate-200 font-semibold text-slate-800 whitespace-nowrap tabular-nums">
+                            {formatDateMonthYear(row.date)}
+                          </td>
+                          <td className="py-2.5 px-4 border-r border-slate-200 font-bold text-slate-900 whitespace-nowrap">
+                            {row.refNumber}
+                          </td>
+                          {selectedClientId === 'ALL' && (
+                            <td className="py-2.5 px-4 border-r border-slate-200 font-semibold text-slate-800">
+                              {row.partyName}
+                            </td>
+                          )}
+                          <td className="py-2.5 px-4 border-r border-slate-200 text-slate-700">
+                            <span className="font-semibold text-slate-900">{row.category}</span>
+                            {row.description && row.description !== row.category && (
+                              <span className="text-slate-500"> — {row.description}</span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-4 border-r border-slate-200 text-center font-bold uppercase text-[11px]">
+                            <span
+                              className={
+                                row.isPaid
+                                  ? 'text-emerald-700'
+                                  : row.isOverdue
+                                  ? 'text-rose-700'
+                                  : 'text-amber-700'
+                              }
+                            >
+                              {row.statusLabel}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-4 border-r border-slate-200 text-right font-semibold text-slate-900 tabular-nums">
+                            {formatAmount(row.debitAmount)}
+                          </td>
+                          <td className="py-2.5 px-4 border-r border-slate-200 text-right font-semibold text-emerald-700 tabular-nums">
+                            {formatAmount(row.creditAmount)}
+                          </td>
+                          <td className="py-2.5 px-4 text-right font-bold text-slate-900 tabular-nums">
+                            {formatAmount(row.balanceAmount)}
+                          </td>
+                        </tr>
+                      ))}
+                    </React.Fragment>
                   ))
                 )}
               </tbody>
-              {monthWiseRows.length > 0 && (
+              {monthWiseGroups.length > 0 && (
                 <tfoot>
                   <tr className="bg-slate-100 border-t-2 border-slate-900 text-xs font-black text-slate-900">
-                    <td className="py-3 px-4 border-r border-slate-300 uppercase">Total</td>
-                    <td className="py-3 px-4 border-r border-slate-300 text-center tabular-nums">
-                      {summary.count}
+                    <td
+                      colSpan={selectedClientId === 'ALL' ? 5 : 4}
+                      className="py-3 px-4 border-r border-slate-300 text-right uppercase"
+                    >
+                      Grand Total ({summary.count} Transactions)
                     </td>
                     <td className="py-3 px-4 border-r border-slate-300 text-right tabular-nums">
                       {currencySymbol} {formatAmount(summary.totalInvoiced)}
@@ -1273,7 +1361,10 @@ export const Statements: React.FC<StatementsProps> = ({
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-900 text-white text-[11px] font-bold uppercase tracking-wider">
-                  <th className="py-2.5 px-4 border-r border-slate-700">Service / Expense Category</th>
+                  <th className="py-2.5 px-4 border-r border-slate-700 w-32">Invoice Date</th>
+                  <th className="py-2.5 px-4 border-r border-slate-700">
+                    Service / Expense Category
+                  </th>
                   <th className="py-2.5 px-4 border-r border-slate-700 text-center">
                     Transactions
                   </th>
@@ -1291,13 +1382,16 @@ export const Statements: React.FC<StatementsProps> = ({
               <tbody className="divide-y divide-slate-200 text-xs">
                 {categoryWiseRows.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="py-10 text-center text-slate-400 font-medium">
+                    <td colSpan={6} className="py-10 text-center text-slate-400 font-medium">
                       No category records found for the selected criteria.
                     </td>
                   </tr>
                 ) : (
                   categoryWiseRows.map((c, idx) => (
                     <tr key={c.category} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/60'}>
+                      <td className="py-2.5 px-4 border-r border-slate-200 font-semibold text-slate-800 whitespace-nowrap tabular-nums">
+                        {formatDateMonthYear(c.latestDate)}
+                      </td>
                       <td className="py-2.5 px-4 border-r border-slate-200 font-bold text-slate-900">
                         {c.category}
                       </td>
@@ -1320,7 +1414,9 @@ export const Statements: React.FC<StatementsProps> = ({
               {categoryWiseRows.length > 0 && (
                 <tfoot>
                   <tr className="bg-slate-100 border-t-2 border-slate-900 text-xs font-black text-slate-900">
-                    <td className="py-3 px-4 border-r border-slate-300 uppercase">Total</td>
+                    <td colSpan={2} className="py-3 px-4 border-r border-slate-300 uppercase">
+                      Total
+                    </td>
                     <td className="py-3 px-4 border-r border-slate-300 text-center tabular-nums">
                       {summary.count}
                     </td>
@@ -1340,63 +1436,26 @@ export const Statements: React.FC<StatementsProps> = ({
           </div>
         )}
 
-        {/* 4. STANDARD AGING SCHEDULE TABLE (FOR CLIENT RECEIVABLES) */}
-        {ledgerSource === 'invoices' && (
-          <div className="space-y-1.5">
-            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-              Aging Schedule of Outstanding Balance
-            </p>
-            <div className="grid grid-cols-2 sm:grid-cols-6 border border-slate-300 rounded-lg overflow-hidden text-xs divide-y sm:divide-y-0 sm:divide-x divide-slate-300">
-              <div className="p-2.5 bg-slate-50">
-                <p className="text-[10px] font-bold text-slate-500 uppercase">Current (Not Due)</p>
-                <p className="font-bold text-slate-900 tabular-nums mt-0.5">
-                  {currencySymbol} {formatAmount(summary.agingCurrent)}
-                </p>
-              </div>
-              <div className="p-2.5 bg-slate-50">
-                <p className="text-[10px] font-bold text-slate-500 uppercase">1 – 30 Days</p>
-                <p className="font-bold text-slate-900 tabular-nums mt-0.5">
-                  {currencySymbol} {formatAmount(summary.aging1to30)}
-                </p>
-              </div>
-              <div className="p-2.5 bg-slate-50">
-                <p className="text-[10px] font-bold text-slate-500 uppercase">31 – 60 Days</p>
-                <p className="font-bold text-slate-900 tabular-nums mt-0.5">
-                  {currencySymbol} {formatAmount(summary.aging31to60)}
-                </p>
-              </div>
-              <div className="p-2.5 bg-slate-50">
-                <p className="text-[10px] font-bold text-slate-500 uppercase">61 – 90 Days</p>
-                <p className="font-bold text-slate-900 tabular-nums mt-0.5">
-                  {currencySymbol} {formatAmount(summary.aging61to90)}
-                </p>
-              </div>
-              <div className="p-2.5 bg-slate-50">
-                <p className="text-[10px] font-bold text-slate-500 uppercase">Over 90 Days</p>
-                <p className="font-bold text-rose-700 tabular-nums mt-0.5">
-                  {currencySymbol} {formatAmount(summary.aging90Plus)}
-                </p>
-              </div>
-              <div className="p-2.5 bg-slate-900 text-white">
-                <p className="text-[10px] font-bold text-slate-300 uppercase">Total Balance Due</p>
-                <p className="font-black text-white tabular-nums mt-0.5">
-                  {currencySymbol} {formatAmount(summary.totalBalance)}
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* 5. STANDARD REMITTANCE INSTRUCTIONS & AUTHORIZED SIGNATURE FOOTER */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-8 pt-6 border-t border-slate-300 text-xs">
+        {/* 4. STANDARD REMITTANCE INSTRUCTIONS & AUTO-APPLIED AUTHORIZED SIGNATURE + COMPANY SEAL FOOTER */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-8 pt-6 border-t border-slate-300 text-xs items-end">
           <div className="space-y-1">
             <p className="font-bold uppercase text-slate-800">
-              Bank Remittance & Payment Instructions
+              Bank Remittance &amp; Payment Instructions
             </p>
-            {settings?.bankDetails ? (
-              <p className="text-slate-600 whitespace-pre-line leading-relaxed">
-                {settings.bankDetails}
-              </p>
+            {settings?.bankName || settings?.bankAccount ? (
+              <div className="text-slate-600 space-y-0.5 leading-relaxed">
+                {settings?.bankName && (
+                  <p>
+                    <span className="font-semibold text-slate-700">Bank:</span> {settings.bankName}
+                  </p>
+                )}
+                {settings?.bankAccount && (
+                  <p>
+                    <span className="font-semibold text-slate-700">Account / IBAN:</span>{' '}
+                    {settings.bankAccount}
+                  </p>
+                )}
+              </div>
             ) : (
               <p className="text-slate-500">
                 Please remit the balance due via Bank Transfer or Cheque payable to{' '}
@@ -1406,24 +1465,48 @@ export const Statements: React.FC<StatementsProps> = ({
             )}
           </div>
 
-          <div className="flex flex-col sm:items-end justify-between space-y-8">
+          <div className="flex flex-col sm:items-end justify-between space-y-2">
             <div className="sm:text-right">
               <p className="font-bold uppercase text-slate-800">
                 For {settings?.name || 'AF© CREATIVE FLOW'}
               </p>
-              <p className="text-[11px] text-slate-500">Authorized Signatory & Company Stamp</p>
+              <p className="text-[11px] text-slate-500">
+                Authorized Signatory &amp; Official Company Seal
+              </p>
             </div>
-            <div className="w-48 border-b border-slate-400 pt-6 sm:text-right">
-              <span className="text-[10px] text-slate-400 uppercase tracking-wider">
-                Authorized Signature
-              </span>
+
+            {/* Auto-Applied Transparent Signature & Company Seal Block */}
+            <div className="min-h-[72px] flex items-center sm:justify-end gap-4 py-1">
+              {applySeal && settings?.companySealUrl && (
+                <img
+                  src={settings.companySealUrl}
+                  alt="Official Company Seal"
+                  className="h-20 w-20 object-contain opacity-95"
+                />
+              )}
+              {applySignature && settings?.signatureUrl && (
+                <img
+                  src={settings.signatureUrl}
+                  alt="Authorized Signature"
+                  className="h-14 max-w-[160px] object-contain"
+                />
+              )}
+            </div>
+
+            <div className="w-52 border-t border-slate-400 pt-1.5 sm:text-right">
+              <p className="text-xs font-bold text-slate-900">
+                {settings?.signatoryName || 'Authorized Signature'}
+              </p>
+              {settings?.signatoryTitle && (
+                <p className="text-[10px] text-slate-500">{settings.signatoryTitle}</p>
+              )}
             </div>
           </div>
         </div>
       </div>
 
       {/* ===================================================================== */}
-      {/* CLEARANCE CERTIFICATE MODAL (FOR SETTLED ACCOUNTS)                    */}
+      {/* CLEARANCE CERTIFICATE MODAL (WITH AUTO-APPLIED SIGNATURE & SEAL)       */}
       {/* ===================================================================== */}
       {showCertificateModal && (
         <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-xs z-50 flex items-center justify-center p-4 no-print">
@@ -1463,7 +1546,7 @@ export const Statements: React.FC<StatementsProps> = ({
               <div className="text-center border-b border-slate-200 pb-4 space-y-1">
                 <h2 className="text-lg font-black uppercase">{settings?.name || 'AF© ACCOUNTS'}</h2>
                 <p className="text-xs font-bold uppercase tracking-widest text-emerald-700">
-                  Certificate of Financial Clearance & Zero Balance
+                  Certificate of Financial Clearance &amp; Zero Balance
                 </p>
               </div>
 
@@ -1480,20 +1563,39 @@ export const Statements: React.FC<StatementsProps> = ({
                   {currencySymbol} {formatAmount(summary.totalInvoiced)}
                 </strong>{' '}
                 and a closing outstanding balance of{' '}
-                <strong>
-                  {currencySymbol} 0.00
-                </strong>
-                .
+                <strong>{currencySymbol} 0.00</strong>.
               </p>
 
-              <div className="flex justify-between items-end pt-8 text-xs">
+              <div className="flex justify-between items-end pt-6 text-xs">
                 <div>
                   <p className="font-bold">Date of Issue:</p>
-                  <p>{formatDate(new Date().toISOString().split('T')[0])}</p>
+                  <p>{formatDateMonthYear(new Date().toISOString().split('T')[0])}</p>
                 </div>
-                <div className="text-right">
-                  <div className="w-40 border-b border-slate-400 mb-1" />
-                  <p className="font-bold">Authorized Signatory</p>
+                <div className="text-right space-y-2">
+                  <div className="min-h-[64px] flex items-center justify-end gap-3">
+                    {applySeal && settings?.companySealUrl && (
+                      <img
+                        src={settings.companySealUrl}
+                        alt="Company Seal"
+                        className="h-16 w-16 object-contain"
+                      />
+                    )}
+                    {applySignature && settings?.signatureUrl && (
+                      <img
+                        src={settings.signatureUrl}
+                        alt="Authorized Signature"
+                        className="h-12 max-w-[140px] object-contain"
+                      />
+                    )}
+                  </div>
+                  <div className="w-44 border-t border-slate-400 pt-1">
+                    <p className="font-bold">
+                      {settings?.signatoryName || 'Authorized Signatory'}
+                    </p>
+                    {settings?.signatoryTitle && (
+                      <p className="text-[10px] text-slate-500">{settings.signatoryTitle}</p>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
