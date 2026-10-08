@@ -364,7 +364,7 @@ export const UserManagementSettings: React.FC<UserManagementSettingsProps> = ({
                 value={profileName}
                 onChange={(e) => setProfileName(e.target.value)}
                 className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm font-semibold text-slate-900 dark:text-white focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all"
-                placeholder="e.g. Afsal Narippatta"
+                placeholder="e.g. Alex Rivera"
               />
               <p className="text-[11px] text-slate-400 dark:text-slate-500">Shown in the top right user menu and audit activity.</p>
             </div>
@@ -380,7 +380,7 @@ export const UserManagementSettings: React.FC<UserManagementSettingsProps> = ({
                 value={profileEmail}
                 onChange={(e) => setProfileEmail(e.target.value)}
                 className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm font-medium text-slate-900 dark:text-white focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all"
-                placeholder="e.g. afsalnarippatta02@gmail.com"
+                placeholder="e.g. user@company.com"
               />
               <p className="text-[11px] text-slate-400 dark:text-slate-500">Used for Google Drive cloud sync and 6-digit OTP password recovery.</p>
             </div>

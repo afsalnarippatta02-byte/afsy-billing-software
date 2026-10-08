@@ -38,7 +38,11 @@ export const loadStoredUsers = (): UserAccount[] => {
     try {
       const parsed = JSON.parse(saved);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
+        return parsed.map((u: UserAccount) => ({
+          ...u,
+          name: u.name && u.name.toLowerCase().includes('afsal') ? 'Administrator' : u.name,
+          email: u.email && u.email.toLowerCase().includes('afsalnarippatta') ? '' : u.email
+        }));
       }
     } catch (e) {
       console.error('Failed to parse users', e);

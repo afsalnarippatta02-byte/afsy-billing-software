@@ -84,7 +84,14 @@ const App: React.FC = () => {
     const savedUser = localStorage.getItem('af_current_user');
     if (savedUser) {
       try {
-        return JSON.parse(savedUser);
+        const parsed = JSON.parse(savedUser);
+        if (parsed?.email && parsed.email.toLowerCase().includes('afsalnarippatta')) {
+          parsed.email = '';
+        }
+        if (parsed?.name && parsed.name.toLowerCase().includes('afsal')) {
+          parsed.name = 'Administrator';
+        }
+        return parsed;
       } catch (e) {
         console.error(e);
       }
@@ -132,9 +139,14 @@ const App: React.FC = () => {
 
   // Multi-Device Email & Google Drive Sync Modal State
   const [showSyncModal, setShowSyncModal] = useState(false);
-  const [syncEmailInput, setSyncEmailInput] = useState<string>(
-    () => getLinkedDriveAccount() || ''
-  );
+  const [syncEmailInput, setSyncEmailInput] = useState<string>(() => {
+    const linked = getLinkedDriveAccount() || '';
+    if (linked.toLowerCase().includes('afsalnarippatta')) {
+      localStorage.removeItem('af_drive_linked_account');
+      return '';
+    }
+    return linked;
+  });
   const [syncStatusMsg, setSyncStatusMsg] = useState<string>('');
   const [isPullingCloud, setIsPullingCloud] = useState<boolean>(false);
   const [driveConnected, setDriveConnected] = useState<boolean>(() => isGoogleDriveConnected());
@@ -181,6 +193,12 @@ const App: React.FC = () => {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
+        if (parsed.email && parsed.email.toLowerCase().includes('afsalnarippatta')) {
+          parsed.email = '';
+        }
+        if (parsed.driveSyncEmail && parsed.driveSyncEmail.toLowerCase().includes('afsalnarippatta')) {
+          parsed.driveSyncEmail = '';
+        }
         return {
           ...INITIAL_SETTINGS,
           ...parsed,
@@ -1035,7 +1053,7 @@ const App: React.FC = () => {
                     required
                     value={syncEmailInput}
                     onChange={e => setSyncEmailInput(e.target.value)}
-                    placeholder="Enter your email (e.g. yourname@gmail.com)"
+                    placeholder="Enter your email (e.g. user@company.com)"
                     className="w-full pl-9 pr-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>

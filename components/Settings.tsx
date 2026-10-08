@@ -1250,7 +1250,7 @@ export const Settings: React.FC<SettingsProps> = ({
                 value={formData.name}
                 onChange={(e) => handleFieldChange('name', e.target.value)}
                 className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
-                placeholder="e.g. Afsal Creative Services LLC"
+                placeholder="e.g. Creative Services LLC"
               />
             </div>
 

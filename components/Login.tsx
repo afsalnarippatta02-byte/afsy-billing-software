@@ -748,7 +748,7 @@ export const Login: React.FC<LoginProps> = ({
                       value={forgotIdentifier}
                       onChange={(e) => setForgotIdentifier(e.target.value)}
                       className="w-full bg-slate-800/80 border border-white/10 rounded-2xl py-3 px-4 text-white text-sm outline-none focus:ring-2 focus:ring-indigo-500"
-                      placeholder="e.g. admin or afsalnarippatta02@gmail.com"
+                      placeholder="e.g. admin or user@company.com"
                     />
                   </div>
 
