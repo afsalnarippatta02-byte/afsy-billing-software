@@ -48,6 +48,8 @@ import {
   downloadLocalBackupJSON, 
   syncToGoogleDriveCloud, 
   fetchFromGoogleDriveCloud, 
+  pullFromCloudAndDriveByEmail,
+  shareLocalDataOffline,
   applyBackupPayload, 
   exportModuleToCSV, 
   parseAndImportClientsCSV, 
@@ -490,20 +492,27 @@ export const Settings: React.FC<SettingsProps> = ({
   const handleTriggerCloudFetch = async () => {
     const syncEmail = formData.driveSyncEmail || currentUser?.email;
     if (!syncEmail) {
-      alert('Please specify your Google Drive Email to fetch cloud records.');
+      setSaveToast({ show: true, msg: 'Please specify your Email ID to fetch cloud records.', type: 'error' });
       return;
     }
 
     setIsCloudFetching(true);
-    setTimeout(() => {
-      const res = fetchFromGoogleDriveCloud(syncEmail);
+    try {
+      const res = await pullFromCloudAndDriveByEmail(syncEmail, 'merge');
       setIsCloudFetching(false);
       if (res.success && res.data) {
-        setBackupRestoreModal({ open: true, payload: res.data });
+        if (onRestoreData) {
+          onRestoreData(res.data);
+        }
+        setSaveToast({ show: true, msg: res.message, type: 'success' });
       } else {
-        alert(res.message);
+        setSaveToast({ show: true, msg: res.message, type: 'error' });
       }
-    }, 800);
+    } catch (err: any) {
+      setIsCloudFetching(false);
+      setSaveToast({ show: true, msg: err?.message || 'Could not fetch cloud data.', type: 'error' });
+    }
+    setTimeout(() => setSaveToast({ show: false }), 5000);
   };
 
   // Handle JSON File Selection for Restore
@@ -653,7 +662,7 @@ export const Settings: React.FC<SettingsProps> = ({
       </div>
 
       {/* Settings Navigation Tabs */}
-      <div className="flex items-center gap-2 p-1.5 bg-slate-200/70 dark:bg-slate-800/80 rounded-2xl w-fit border border-slate-200/80 dark:border-slate-700">
+      <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 p-1.5 bg-slate-200/70 dark:bg-slate-800/80 rounded-2xl w-full sm:w-fit border border-slate-200/80 dark:border-slate-700 overflow-x-auto">
         <button
           type="button"
           onClick={() => setActiveTab('company')}
@@ -1307,7 +1316,7 @@ export const Settings: React.FC<SettingsProps> = ({
               Country, Currency & Financial Defaults
             </h3>
             <p className="text-xs text-slate-500 dark:text-slate-400 font-medium mt-0.5">
-              Configure country region, local currency symbols (e.g. ₹ INR, د.إ AED, $ USD), tax percentages, and bank remittance wire instructions.
+              Configure country region, local currency symbols (e.g. ₹ INR, {'\u20C3'} AED, $ USD), tax percentages, and bank remittance wire instructions.
             </p>
           </div>
 
@@ -1357,10 +1366,10 @@ export const Settings: React.FC<SettingsProps> = ({
               </label>
               <input
                 type="text"
-                value={formData.currencySymbol || 'د.إ'}
+                value={formData.currencySymbol || '\u20C3'}
                 onChange={(e) => handleFieldChange('currencySymbol', e.target.value)}
                 className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
-                placeholder="e.g. ₹, د.إ, $, €, £"
+                placeholder="e.g. ₹, ⃃, $, €, £"
               />
             </div>
 

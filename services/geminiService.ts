@@ -26,7 +26,7 @@ Your role is to:
 - Provide high-level financial analysis on billings, proforma invoices, client revenues, cash flow, and operating expenses.
 - Recommend actionable pricing strategies, retainer models, and profit margin enhancements.
 - Analyze overdue invoices and propose tactical recovery plans.
-- Give crisp, mathematically sound, professional advice with clear bullet points, currency in AED (د.إ), and structured breakdowns.`,
+- Give crisp, mathematically sound, professional advice with clear bullet points, currency in AED (\u20C3), and structured breakdowns.`,
     suggestedPrompts: [
       'Analyze our current invoice cash flow and identify top revenue drivers',
       'What pricing adjustments should we make to increase agency margins by 15%?',
@@ -63,7 +63,7 @@ Provide deep, structured, thorough strategic analysis with rigorous rationale.`,
 Your responsibilities:
 - Guide the agency on UAE FTA VAT (5%) rules, Tax Invoice vs. Proforma Invoice requirements, TRN numbers, and standard payment terms (7 to 30 days).
 - Advise on proper quotation vs. proforma invoice vs. tax invoice disclosures.
-- Keep all monetary figures in UAE Dirhams (AED / د.إ) with clear 5% VAT calculations.`,
+- Keep all monetary figures in UAE Dirhams (AED / \u20C3) with clear 5% VAT calculations.`,
     suggestedPrompts: [
       'When should we issue a Proforma Invoice vs a Tax Invoice in the UAE?',
       'What are the mandatory elements for a compliant UAE Tax Invoice?',

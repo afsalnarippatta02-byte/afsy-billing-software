@@ -417,6 +417,18 @@ const AIChatBot: React.FC<AIChatBotProps> = ({
               <BrainCircuit size={12} />
               <span>3.1 Pro</span>
             </button>
+            <button
+              onClick={() => setSelectedModel('local-offline-ai')}
+              title="100% Offline On-Device Financial & Billing AI Engine"
+              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all flex items-center space-x-1 ${
+                selectedModel === 'local-offline-ai'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <ShieldCheck size={12} />
+              <span>Offline AI</span>
+            </button>
           </div>
         </div>
       </div>

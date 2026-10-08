@@ -242,12 +242,10 @@ export const StaffPayroll: React.FC<StaffPayrollProps> = ({
     setEditingStaff(null);
   };
 
-  const handleDeleteStaff = (id: string, name: string) => {
-    if (confirm(`Are you sure you want to remove staff member "${name}"?`)) {
-      onUpdateStaffList(staffList.filter(s => s.id !== id));
-      onUpdateAdvances(advances.filter(a => a.staffId !== id));
-      onUpdateAttendance(attendanceRecords.filter(r => r.staffId !== id));
-    }
+  const handleDeleteStaff = (id: string, _name: string) => {
+    onUpdateStaffList(staffList.filter(s => s.id !== id));
+    onUpdateAdvances(advances.filter(a => a.staffId !== id));
+    onUpdateAttendance(attendanceRecords.filter(r => r.staffId !== id));
   };
 
   const handleOpenAddAdvance = (staffId?: string) => {
@@ -307,14 +305,12 @@ export const StaffPayroll: React.FC<StaffPayrollProps> = ({
   };
 
   const handleDeleteAdvance = (advId: string) => {
-    if (confirm('Are you sure you want to delete this advance payment record? The deducted amount will be refunded to net salary.')) {
-      const remaining = advances.filter(a => a.id !== advId);
-      onUpdateAdvances(remaining);
-      if (breakdownStaff) {
-        const staffAdvancesLeft = remaining.filter(a => a.staffId === breakdownStaff.id && (a.month === selectedMonth || a.date.startsWith(selectedMonth)));
-        if (staffAdvancesLeft.length === 0) {
-          setBreakdownStaff(null);
-        }
+    const remaining = advances.filter(a => a.id !== advId);
+    onUpdateAdvances(remaining);
+    if (breakdownStaff) {
+      const staffAdvancesLeft = remaining.filter(a => a.staffId === breakdownStaff.id && (a.month === selectedMonth || a.date.startsWith(selectedMonth)));
+      if (staffAdvancesLeft.length === 0) {
+        setBreakdownStaff(null);
       }
     }
   };

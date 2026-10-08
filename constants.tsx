@@ -1,4 +1,3 @@
-
 import { ProjectType, Client, Invoice, InvoiceStatus, CompanySettings, Expense, ExpenseCategory } from './types';
 import { AF_LOGO_SVG_DATA_URI } from './components/AfLogo';
 
@@ -13,7 +12,7 @@ export interface CountryInfo {
 }
 
 export const SUPPORTED_COUNTRIES: CountryInfo[] = [
-  { code: 'AE', name: 'United Arab Emirates (UAE)', defaultCurrency: 'AED', currencySymbol: 'د.إ', defaultTaxRate: 5, taxName: 'VAT', flag: '🇦🇪' },
+  { code: 'AE', name: 'United Arab Emirates (UAE)', defaultCurrency: 'AED', currencySymbol: '\u20C3', defaultTaxRate: 5, taxName: 'VAT', flag: '🇦🇪' },
   { code: 'IN', name: 'India', defaultCurrency: 'INR', currencySymbol: '₹', defaultTaxRate: 18, taxName: 'GST', flag: '🇮🇳' },
   { code: 'US', name: 'United States (America)', defaultCurrency: 'USD', currencySymbol: '$', defaultTaxRate: 0, taxName: 'Sales Tax', flag: '🇺🇸' },
   { code: 'SA', name: 'Saudi Arabia', defaultCurrency: 'SAR', currencySymbol: 'ر.س', defaultTaxRate: 15, taxName: 'VAT', flag: '🇸🇦' },
@@ -45,7 +44,7 @@ export const INITIAL_SETTINGS: CompanySettings = {
   countryName: 'United Arab Emirates (UAE)',
   defaultCurrency: 'AED',
   currency: 'AED',
-  currencySymbol: 'د.إ',
+  currencySymbol: '\u20C3',
   defaultTaxRate: 5,
   taxRate: 5,
   taxName: 'VAT',
@@ -57,7 +56,7 @@ export const INITIAL_SETTINGS: CompanySettings = {
 };
 
 export const CURRENCIES = [
-  { code: 'AED', symbol: 'د.إ', name: 'UAE Dirham / DH (AED - د.إ)' },
+  { code: 'AED', symbol: '\u20C3', name: 'UAE Dirham / DH (AED - \u20C3)' },
   { code: 'USD', symbol: '$', name: 'US Dollar (USD - $)' },
   { code: 'INR', symbol: '₹', name: 'Indian Rupee (INR - ₹)' },
   { code: 'SAR', symbol: 'ر.س', name: 'Saudi Riyal (SAR - ر.س)' },
@@ -77,6 +76,21 @@ export const CURRENCIES = [
   { code: 'JPY', symbol: '¥', name: 'Japanese Yen (JPY - ¥)' },
   { code: 'CNY', symbol: '¥', name: 'Chinese Yuan (CNY - ¥)' }
 ];
+
+export const SERVICE_CATALOG: Record<string, string[]> = {
+  'Ad Campaign': ['Shoot', 'Pre-Production', 'Creative Direction', 'Talent & Casting', 'Location Permit'],
+  'Video Production': ['Commercial Shoot', 'Corporate Video', 'Drone Cinematography', 'Studio Lighting & Grip'],
+  'Poster Design': ['Key Visual Design', 'Social Media Poster', 'Billboard Layout', 'Print Ready Artwork'],
+  'Post Production': ['4K Video Editing', 'Color Grading', '3D & VFX Motion', 'Sound Design & Mastering'],
+  'Social Media': ['Monthly Retainer', 'Reels Package (10x)', 'Content Strategy', 'Paid Media Management'],
+  'Photography': ['Product Shoot', 'Fashion & Editorial', 'Event Coverage', 'High-End Retouching'],
+  'Branding': ['Logo & Identity', 'Brand Guidelines', 'Packaging Design', 'Pitch Deck Design']
+};
+
+export const SERVICE_PRESETS = Object.entries(SERVICE_CATALOG).map(([category, services]) => ({
+  category,
+  services
+}));
 
 export const MOCK_CLIENTS: Client[] = [];
 

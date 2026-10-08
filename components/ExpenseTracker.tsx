@@ -197,16 +197,10 @@ export const ExpenseTracker: React.FC<ExpenseTrackerProps> = ({
 
   // Delete Category Handler
   const handleDeleteCategory = (catToDelete: string) => {
-    if (!isAdmin) return;
-    if (categories.length <= 1) {
-      alert('You must keep at least one category.');
-      return;
-    }
-    if (confirm(`Are you sure you want to remove the category "${catToDelete}"? Expenses assigned to it will remain preserved.`)) {
-      setCategories(prev => prev.filter(c => c !== catToDelete));
-      if (formData.category === catToDelete) {
-        setFormData(prev => ({ ...prev, category: (categories || []).find(c => c !== catToDelete) || 'Other' }));
-      }
+    if (categories.length <= 1) return;
+    setCategories(prev => prev.filter(c => c !== catToDelete));
+    if (formData.category === catToDelete) {
+      setFormData(prev => ({ ...prev, category: (categories || []).find(c => c !== catToDelete) || 'Other' }));
     }
   };
 
@@ -335,10 +329,7 @@ export const ExpenseTracker: React.FC<ExpenseTrackerProps> = ({
   // Delete Expense
   const handleDeleteExpense = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!isAdmin) return;
-    if (confirm('Are you sure you want to delete this expense record?')) {
-      setExpenses(prev => prev.filter(exp => exp.id !== id));
-    }
+    setExpenses(prev => prev.filter(exp => exp.id !== id));
   };
 
   // Duplicate Expense

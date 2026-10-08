@@ -129,10 +129,8 @@ export const ClientList: React.FC<ClientListProps> = ({
 
   const handleDelete = (id: string, name: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    if (confirm(`Are you sure you want to remove "${name}" from your client database?`)) {
-      if (onDeleteClient) {
-        onDeleteClient(id);
-      }
+    if (onDeleteClient) {
+      onDeleteClient(id);
     }
   };
 
