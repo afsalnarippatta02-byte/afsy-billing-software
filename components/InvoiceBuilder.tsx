@@ -374,8 +374,8 @@ ${isQuotation ? 'Valid Until' : 'Due Date'}: ${formatDate(invoice.dueDate)}
 Payment / Remittance Details:
 Beneficiary: ${settings.beneficiaryName || settings.name}
 Bank: ${settings.bankName || 'Emirates NBD'}
-IBAN: ${settings.iban || 'N/A'}
-Account Number: ${settings.accountNumber || 'N/A'}
+IBAN: ${settings.iban || settings.bankAccount || 'N/A'}
+Account Number: ${settings.accountNumber || settings.bankAccount || 'N/A'}
 
 Thank you for your business. Please let us know if you have any questions.
 

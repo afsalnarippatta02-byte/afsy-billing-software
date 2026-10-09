@@ -408,8 +408,12 @@ export const getLinkedDriveAccount = (): string | null => {
 export const setLinkedDriveAccount = (email: string | null): void => {
   if (email && email.trim()) {
     const clean = email.toLowerCase().trim();
+    const prevEmail = localStorage.getItem(DRIVE_LINKED_ACCOUNT_KEY);
     localStorage.setItem(DRIVE_LINKED_ACCOUNT_KEY, clean);
-    linkGoogleDriveAccountByEmail(clean);
+    const existingUser = getGoogleDriveUser();
+    if (prevEmail !== clean || existingUser?.email?.toLowerCase().trim() !== clean) {
+      linkGoogleDriveAccountByEmail(clean);
+    }
   } else {
     localStorage.removeItem(DRIVE_LINKED_ACCOUNT_KEY);
   }

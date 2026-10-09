@@ -251,8 +251,13 @@ const App: React.FC = () => {
       gUser => {
         setDriveConnected(true);
         if (gUser.email) {
-          setSyncEmailInput(gUser.email);
-          setLinkedDriveAccount(gUser.email);
+          const clean = gUser.email.toLowerCase().trim();
+          setSyncEmailInput(prev => (prev === clean ? prev : clean));
+          try {
+            localStorage.setItem('af_linked_drive_account', clean);
+          } catch {
+            // ignore storage errors
+          }
         }
       },
       () => setDriveConnected(false)
@@ -382,24 +387,61 @@ const App: React.FC = () => {
   }, [invoices, expenses, clients, staffList, staffAdvances, staffAttendance, categories, settings, users, user?.email]);
 
   const handleRestoreAllData = (payload: AppBackupPayload) => {
-    if (payload.invoices) setInvoices(payload.invoices);
-    if (payload.clients) setClients(payload.clients);
-    if (payload.expenses) setExpenses(payload.expenses);
-    if (payload.staffList) setStaffList(payload.staffList);
-    if (payload.staffAdvances) setStaffAdvances(payload.staffAdvances);
-    if (payload.staffAttendance) setStaffAttendance(payload.staffAttendance);
-    if (payload.categories && payload.categories.length > 0) setCategories(payload.categories);
-    if (payload.settings) {
-      setSettings(prev => ({
-        ...prev,
-        ...payload.settings,
-        currencySymbol:
-          !payload.settings.currencySymbol || payload.settings.currencySymbol === 'د.إ'
-            ? '\u20C3'
-            : payload.settings.currencySymbol
-      }));
+    if (payload.invoices) {
+      setInvoices(prev =>
+        JSON.stringify(prev) === JSON.stringify(payload.invoices) ? prev : payload.invoices
+      );
     }
-    if (payload.users && payload.users.length > 0) setUsers(payload.users);
+    if (payload.clients) {
+      setClients(prev =>
+        JSON.stringify(prev) === JSON.stringify(payload.clients) ? prev : payload.clients
+      );
+    }
+    if (payload.expenses) {
+      setExpenses(prev =>
+        JSON.stringify(prev) === JSON.stringify(payload.expenses) ? prev : payload.expenses
+      );
+    }
+    if (payload.staffList) {
+      setStaffList(prev =>
+        JSON.stringify(prev) === JSON.stringify(payload.staffList) ? prev : payload.staffList
+      );
+    }
+    if (payload.staffAdvances) {
+      setStaffAdvances(prev =>
+        JSON.stringify(prev) === JSON.stringify(payload.staffAdvances) ? prev : payload.staffAdvances
+      );
+    }
+    if (payload.staffAttendance) {
+      setStaffAttendance(prev =>
+        JSON.stringify(prev) === JSON.stringify(payload.staffAttendance)
+          ? prev
+          : payload.staffAttendance
+      );
+    }
+    if (payload.categories && payload.categories.length > 0) {
+      setCategories(prev =>
+        JSON.stringify(prev) === JSON.stringify(payload.categories) ? prev : payload.categories
+      );
+    }
+    if (payload.settings) {
+      setSettings(prev => {
+        const next: CompanySettings = {
+          ...prev,
+          ...payload.settings,
+          currencySymbol:
+            !payload.settings.currencySymbol || payload.settings.currencySymbol === 'د.إ'
+              ? '\u20C3'
+              : payload.settings.currencySymbol
+        };
+        return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
+      });
+    }
+    if (payload.users && payload.users.length > 0) {
+      setUsers(prev =>
+        JSON.stringify(prev) === JSON.stringify(payload.users) ? prev : payload.users!
+      );
+    }
   };
 
   const handleLogin = async (userAccount: UserAccount) => {

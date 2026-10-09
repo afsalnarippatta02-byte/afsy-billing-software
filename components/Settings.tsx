@@ -179,9 +179,6 @@ export const Settings: React.FC<SettingsProps> = ({
   useEffect(() => {
     setFormData(settings);
     setUrlInput(settings.logoUrl || '');
-    if (settings.driveSyncEmail && !isGoogleDriveConnected()) {
-      linkGoogleDriveAccountByEmail(settings.driveSyncEmail);
-    }
   }, [settings]);
 
   // Listen to Google Auth state
@@ -1649,8 +1646,11 @@ export const Settings: React.FC<SettingsProps> = ({
               </label>
               <input
                 type="text"
-                value={formData.trnNumber || ''}
-                onChange={(e) => handleFieldChange('trnNumber', e.target.value)}
+                value={formData.trnNumber ?? formData.vatNumber ?? ''}
+                onChange={(e) => {
+                  handleFieldChange('trnNumber', e.target.value);
+                  handleFieldChange('vatNumber', e.target.value);
+                }}
                 className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                 placeholder="e.g. 100234567890003"
               />
@@ -1819,8 +1819,11 @@ export const Settings: React.FC<SettingsProps> = ({
               </label>
               <input
                 type="text"
-                value={formData.bankAccount || ''}
-                onChange={(e) => handleFieldChange('bankAccount', e.target.value)}
+                value={formData.bankAccount ?? formData.iban ?? ''}
+                onChange={(e) => {
+                  handleFieldChange('bankAccount', e.target.value);
+                  handleFieldChange('iban', e.target.value);
+                }}
                 className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                 placeholder="AE00 0000 0000 0000 0000"
               />

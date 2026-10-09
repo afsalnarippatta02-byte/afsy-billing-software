@@ -97,6 +97,7 @@ export const ExpenseTracker: React.FC<ExpenseTrackerProps> = ({
   const [newCategoryError, setNewCategoryError] = useState('');
   const [inlineNewCategory, setInlineNewCategory] = useState('');
   const [showInlineCategoryInput, setShowInlineCategoryInput] = useState(false);
+  const [formError, setFormError] = useState('');
 
   // Add / Edit Form State
   const [formMode, setFormMode] = useState<'single' | 'itemized'>('single');
@@ -207,6 +208,7 @@ export const ExpenseTracker: React.FC<ExpenseTrackerProps> = ({
   // Open Form to Add New Expense
   const handleOpenAddModal = (presetCategory?: string) => {
     setEditingExpenseId(null);
+    setFormError('');
     setFormMode('single');
     setFormData({
       date: getToday(),
@@ -228,6 +230,7 @@ export const ExpenseTracker: React.FC<ExpenseTrackerProps> = ({
   // Open Form to Edit Expense
   const handleOpenEditModal = (exp: Expense) => {
     setEditingExpenseId(exp.id);
+    setFormError('');
     const hasItemized = (exp.quantity && exp.quantity > 1) || exp.unitPrice;
     setFormMode(hasItemized ? 'itemized' : 'single');
     
@@ -269,13 +272,14 @@ export const ExpenseTracker: React.FC<ExpenseTrackerProps> = ({
     }
 
     if (!formData.description.trim()) {
-      alert('Please enter a description or purpose for the expense.');
+      setFormError('Please enter a description or purpose for the expense.');
       return;
     }
     if (finalAmount <= 0) {
-      alert('Please enter a valid expense amount greater than 0.');
+      setFormError('Please enter a valid expense amount greater than 0.');
       return;
     }
+    setFormError('');
 
     let calculatedTax = 0;
     if (formData.taxRatePercent > 0) {
@@ -1495,6 +1499,12 @@ export const ExpenseTracker: React.FC<ExpenseTrackerProps> = ({
             </div>
 
             {/* Modal Actions */}
+            {formError && (
+              <div className="mx-6 mb-2 p-3 rounded-xl bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-800 text-rose-600 dark:text-rose-300 text-xs font-bold flex items-center gap-2">
+                <AlertCircle size={15} className="shrink-0" />
+                <span>{formError}</span>
+              </div>
+            )}
             <div className="p-5 bg-slate-50 dark:bg-slate-800/50 border-t border-slate-100 dark:border-slate-800 flex items-center justify-end space-x-3">
               <button
                 type="button"

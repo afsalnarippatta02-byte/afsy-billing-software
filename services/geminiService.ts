@@ -1,18 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
 import { ChatMessage, ChatRolePreset, GeminiModelType, Invoice, Expense, Client, CompanySettings, InvoiceStatus } from "../types";
-
-const getClientAI = () => {
-  const apiKey = (process.env.API_KEY || process.env.GEMINI_API_KEY || '') as string;
-  if (!apiKey) return null;
-  return new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
-    },
-  });
-};
 
 export const CHAT_ROLE_PRESETS: ChatRolePreset[] = [
   {
@@ -424,38 +410,10 @@ export const geminiService = {
         }
       }
     } catch (serverErr) {
-      console.warn('Server AI endpoint unreachable, trying client SDK or local AI engine:', serverErr);
+      console.warn('Server AI endpoint unreachable, using Local Offline AI Engine:', serverErr);
     }
 
-    // 2. Try Direct Client SDK if API key is injected in client env
-    const clientAi = getClientAI();
-    if (clientAi) {
-      const contents = validMessages.map(msg => ({
-        role: msg.role === 'user' ? 'user' : 'model',
-        parts: [{ text: msg.text }],
-      }));
-      const targetModel = model === 'gemini-3.5-flash' ? 'gemini-3.8-flash' : model;
-      try {
-        const response = await clientAi.models.generateContent({
-          model: targetModel,
-          contents,
-          config: {
-            systemInstruction: fullSystemInstruction,
-            temperature: model === 'gemini-3.1-pro-preview' ? 0.4 : 0.7,
-          },
-        });
-        if (response.text) {
-          return {
-            text: response.text,
-            modelUsed: model,
-          };
-        }
-      } catch (sdkErr) {
-        console.warn('Client Gemini SDK fallback to Local Offline AI Engine:', sdkErr);
-      }
-    }
-
-    // 3. Seamless Fallback to Built-in Local Offline AI Engine (never fails!)
+    // 2. Seamless Fallback to Built-in Local Offline AI Engine (never fails!)
     return {
       text: runLocalOfflineAIEngine(lastUserMessage, contextPayload),
       modelUsed: 'local-offline-ai',
@@ -479,25 +437,6 @@ export const geminiService = {
       }
     } catch {
       // ignore and fall back
-    }
-
-    try {
-      const ai = getClientAI();
-      if (ai) {
-        const prompt = `Act as a professional billing expert. 
-Polish the following line item description for a client invoice to make it sound professional, crisp, and clean.
-Service/Item: ${service}
-Raw Details: ${details}
-Keep it concise (max 20 words) with no quotation marks.`;
-
-        const response = await ai.models.generateContent({
-          model: 'gemini-3.1-flash-lite',
-          contents: prompt,
-        });
-        if (response.text) return response.text.trim();
-      }
-    } catch {
-      // ignore and use local polish
     }
 
     return polishLocalDescription(service, details);

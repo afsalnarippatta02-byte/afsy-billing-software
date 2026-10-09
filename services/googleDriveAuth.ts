@@ -106,16 +106,38 @@ function loadLinkedProfileMetadata(): GoogleDriveUser | null {
   return null;
 }
 
-function notifyAuthSubscribers() {
+let isNotifyingSubscribers = false;
+let lastNotifiedSignature = '';
+
+function notifyAuthSubscribers(force: boolean = false) {
+  if (isNotifyingSubscribers) return;
+
   const currentUser = getGoogleDriveUser();
   const connected = isGoogleDriveConnected();
-  authSubscribers.forEach(sub => {
-    if (connected && currentUser) {
-      if (sub.onSuccess) sub.onSuccess(currentUser, cachedAccessToken || 'cloud-vault-linked');
-    } else {
-      if (sub.onFailure) sub.onFailure();
-    }
-  });
+  const token = cachedAccessToken || 'cloud-vault-linked';
+  const signature =
+    connected && currentUser
+      ? `1:${currentUser.email || ''}:${currentUser.uid || ''}:${currentUser.authMode || ''}:${token}`
+      : '0';
+
+  if (!force && signature === lastNotifiedSignature) {
+    return;
+  }
+  lastNotifiedSignature = signature;
+
+  isNotifyingSubscribers = true;
+  try {
+    const subscribersSnapshot = Array.from(authSubscribers);
+    subscribersSnapshot.forEach(sub => {
+      if (connected && currentUser) {
+        if (sub.onSuccess) sub.onSuccess(currentUser, token);
+      } else {
+        if (sub.onFailure) sub.onFailure();
+      }
+    });
+  } finally {
+    isNotifyingSubscribers = false;
+  }
 }
 
 // Listen to Firebase Auth state changes globally to clear cachedAccessToken when signed out
