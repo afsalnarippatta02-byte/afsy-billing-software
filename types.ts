@@ -185,6 +185,17 @@ export interface CompanySettings {
   driveSyncEmail?: string;
   autoDriveSync?: boolean;
   lastDriveSync?: string;
+  // Header Status Symbol & Save Animation Settings
+  headerStatusMode?: 'symbol' | 'hidden';
+  // AI Tool Customization & Manual Move Settings
+  aiFloatingEnabled?: boolean;
+  aiNavEnabled?: boolean;
+  aiButtonStyle?: 'full' | 'compact' | 'icon';
+  aiPositionPreset?: 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left' | 'custom';
+  aiCustomPosition?: { x: number; y: number } | null;
+  aiDraggable?: boolean;
+  aiThemeColor?: 'indigo' | 'emerald' | 'violet' | 'slate' | 'amber';
+  aiDefaultMode?: 'hybrid' | 'offline' | 'cloud';
 }
 
 export type View = 'dashboard' | 'invoices' | 'clients' | 'statements' | 'expenses' | 'staff' | 'ai-helper' | 'settings';

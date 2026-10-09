@@ -744,3 +744,181 @@ export const parseAndImportExpensesCSV = (csvText: string): Expense[] => {
 
   return expenses;
 };
+
+const VERIFIED_EMAILS_KEY = 'af_verified_emails_map';
+const LOCAL_PENDING_CODES_KEY = 'af_pending_email_codes';
+
+/**
+ * Check if an Email ID has been verified via 4-digit verification code (or Google OAuth)
+ */
+export const isEmailVerified = (email?: string | null): boolean => {
+  if (!email) return false;
+  const clean = email.toLowerCase().trim();
+  if (!clean) return false;
+  try {
+    const map = JSON.parse(localStorage.getItem(VERIFIED_EMAILS_KEY) || '{}');
+    return !!map[clean];
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Mark an Email ID as verified locally
+ */
+export const markEmailVerified = (email: string): void => {
+  const clean = (email || '').toLowerCase().trim();
+  if (!clean) return;
+  try {
+    const map = JSON.parse(localStorage.getItem(VERIFIED_EMAILS_KEY) || '{}');
+    map[clean] = {
+      verified: true,
+      verifiedAt: new Date().toISOString()
+    };
+    localStorage.setItem(VERIFIED_EMAILS_KEY, JSON.stringify(map));
+  } catch (e) {
+    console.warn('Could not save verified email state:', e);
+  }
+};
+
+/**
+ * Request a 4-digit verification code for an Email ID
+ */
+export const requestEmailVerificationCode = async (
+  email: string
+): Promise<{ success: boolean; dispatchCode?: string; message: string }> => {
+  const cleanEmail = (email || '').toLowerCase().trim();
+  if (!cleanEmail || !cleanEmail.includes('@')) {
+    return {
+      success: false,
+      message: 'Please enter a valid Email ID (e.g. user@company.com).'
+    };
+  }
+
+  // Try server endpoint first
+  try {
+    const res = await fetch('/api/email-verify/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: cleanEmail })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && data.dispatchCode) {
+        // Also cache locally so offline confirmation works seamlessly
+        const pending = JSON.parse(localStorage.getItem(LOCAL_PENDING_CODES_KEY) || '{}');
+        pending[cleanEmail] = {
+          code: String(data.dispatchCode),
+          expiresAt: Date.now() + 10 * 60 * 1000
+        };
+        localStorage.setItem(LOCAL_PENDING_CODES_KEY, JSON.stringify(pending));
+        return {
+          success: true,
+          dispatchCode: String(data.dispatchCode),
+          message: data.message || `4-digit verification code sent to ${cleanEmail}.`
+        };
+      }
+    }
+  } catch (e) {
+    console.warn('Offline fallback for 4-digit email verification code:', e);
+  }
+
+  // Offline / Local fallback 4-digit generator
+  const fallbackCode = String(Math.floor(1000 + Math.random() * 9000));
+  const pending = JSON.parse(localStorage.getItem(LOCAL_PENDING_CODES_KEY) || '{}');
+  pending[cleanEmail] = {
+    code: fallbackCode,
+    expiresAt: Date.now() + 10 * 60 * 1000
+  };
+  localStorage.setItem(LOCAL_PENDING_CODES_KEY, JSON.stringify(pending));
+
+  return {
+    success: true,
+    dispatchCode: fallbackCode,
+    message: `4-digit verification code generated for ${cleanEmail}.`
+  };
+};
+
+/**
+ * Confirm the 4-digit verification code and immediately mirror & sync all app data under that Email ID & Google Drive
+ */
+export const confirmEmailVerificationCode = async (
+  email: string,
+  code: string
+): Promise<{
+  success: boolean;
+  verified: boolean;
+  data?: AppBackupPayload;
+  message: string;
+}> => {
+  const cleanEmail = (email || '').toLowerCase().trim();
+  const cleanCode = String(code || '').trim();
+
+  if (!cleanEmail || cleanCode.length !== 4) {
+    return {
+      success: false,
+      verified: false,
+      message: 'Please enter the 4-digit verification code.'
+    };
+  }
+
+  let verified = false;
+
+  // 1. Verify against Server API
+  try {
+    const res = await fetch('/api/email-verify/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: cleanEmail, code: cleanCode })
+    });
+    const result = await res.json();
+    if (res.ok && result.success && result.verified) {
+      verified = true;
+    } else if (!res.ok && result.message) {
+      // Check local pending code before returning error
+      const pending = JSON.parse(localStorage.getItem(LOCAL_PENDING_CODES_KEY) || '{}');
+      const localRec = pending[cleanEmail];
+      if (localRec && localRec.code === cleanCode && Date.now() <= localRec.expiresAt) {
+        verified = true;
+      } else {
+        return {
+          success: false,
+          verified: false,
+          message: result.message
+        };
+      }
+    }
+  } catch {
+    // 2. Verify against Local Pending Code if offline
+    const pending = JSON.parse(localStorage.getItem(LOCAL_PENDING_CODES_KEY) || '{}');
+    const localRec = pending[cleanEmail];
+    if (localRec && localRec.code === cleanCode && Date.now() <= localRec.expiresAt) {
+      verified = true;
+    }
+  }
+
+  if (!verified) {
+    return {
+      success: false,
+      verified: false,
+      message: 'Invalid 4-digit verification code. Please check the 4 numbers and try again.'
+    };
+  }
+
+  // Mark verified and immediately mirror & sync both directions (Cloud/Drive -> Local AND Local -> Cloud/Drive)
+  markEmailVerified(cleanEmail);
+  setLinkedDriveAccount(cleanEmail);
+
+  // Pull & merge any existing data from Google Drive & Cloud Vault for this email, then push mirrored state back
+  const pullRes = await pullFromCloudAndDriveByEmail(cleanEmail, 'merge');
+  const mergedPayload = pullRes.data || gatherAppBackupPayload(cleanEmail);
+  await syncToGoogleDriveCloud(cleanEmail, mergedPayload);
+
+  return {
+    success: true,
+    verified: true,
+    data: mergedPayload,
+    message: `Verified ${cleanEmail}! Your workspace is now mirrored and syncing automatically across Google Drive and all connected devices.`
+  };
+};
+

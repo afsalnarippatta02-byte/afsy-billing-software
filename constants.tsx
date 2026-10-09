@@ -52,7 +52,16 @@ export const INITIAL_SETTINGS: CompanySettings = {
   trnNumber: '',
   bankName: '',
   bankAccount: '',
-  invoiceFooterNote: 'Thank you for your business.'
+  invoiceFooterNote: 'Thank you for your business.',
+  headerStatusMode: 'symbol',
+  aiFloatingEnabled: true,
+  aiNavEnabled: true,
+  aiButtonStyle: 'compact',
+  aiPositionPreset: 'bottom-right',
+  aiCustomPosition: null,
+  aiDraggable: true,
+  aiThemeColor: 'indigo',
+  aiDefaultMode: 'hybrid'
 };
 
 export const CURRENCIES = [

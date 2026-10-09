@@ -12,6 +12,7 @@ const __dirname = path.dirname(__filename);
 const PORT = 3000;
 const DATA_DIR = path.join(__dirname, '.data');
 const VAULT_FILE = path.join(DATA_DIR, 'email_cloud_vault.json');
+const VERIFY_FILE = path.join(DATA_DIR, 'email_verifications.json');
 
 // Ensure data directory exists for multi-device email sync persistence
 if (!fs.existsSync(DATA_DIR)) {
@@ -43,6 +44,39 @@ function writeVault(store: CloudVaultStore): void {
     fs.writeFileSync(VAULT_FILE, JSON.stringify(store, null, 2), 'utf-8');
   } catch (e) {
     console.warn('Error writing vault file:', e);
+  }
+}
+
+interface VerificationRecord {
+  email: string;
+  code: string;
+  createdAt: number;
+  expiresAt: number;
+  verified: boolean;
+  verifiedAt?: string;
+}
+
+interface VerificationStore {
+  [email: string]: VerificationRecord;
+}
+
+function readVerifications(): VerificationStore {
+  try {
+    if (fs.existsSync(VERIFY_FILE)) {
+      const raw = fs.readFileSync(VERIFY_FILE, 'utf-8');
+      return JSON.parse(raw);
+    }
+  } catch (e) {
+    console.warn('Error reading verifications file:', e);
+  }
+  return {};
+}
+
+function writeVerifications(store: VerificationStore): void {
+  try {
+    fs.writeFileSync(VERIFY_FILE, JSON.stringify(store, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('Error writing verifications file:', e);
   }
 }
 
@@ -187,6 +221,116 @@ async function startServer() {
       timestamp: nowIso,
       data: finalPayload,
       message: `Synchronized all records across devices for ${cleanEmail}.`,
+    });
+  });
+
+  // ============================================================================
+  // 1B. 4-DIGIT EMAIL VERIFICATION + AUTOMATIC GOOGLE DRIVE MIRROR TRIGGER
+  // ============================================================================
+  app.post('/api/email-verify/send', (req, res) => {
+    const cleanEmail = (req.body?.email || '').toLowerCase().trim();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      res.status(400).json({
+        success: false,
+        message: 'Please enter a valid Email ID to receive the 4-digit verification code.',
+      });
+      return;
+    }
+
+    // Generate 4-digit code (1000 to 9999)
+    const code = String(Math.floor(1000 + Math.random() * 9000));
+    const now = Date.now();
+    const store = readVerifications();
+    store[cleanEmail] = {
+      email: cleanEmail,
+      code,
+      createdAt: now,
+      expiresAt: now + 10 * 60 * 1000, // 10 minutes
+      verified: false,
+    };
+    writeVerifications(store);
+
+    res.json({
+      success: true,
+      email: cleanEmail,
+      dispatchCode: code,
+      expiresInSeconds: 600,
+      message: `4-digit verification code sent for ${cleanEmail}. Enter the 4-digit code to verify and activate automatic Google Drive mirroring.`,
+    });
+  });
+
+  app.post('/api/email-verify/confirm', (req, res) => {
+    const cleanEmail = (req.body?.email || '').toLowerCase().trim();
+    const cleanCode = String(req.body?.code || '').trim();
+
+    if (!cleanEmail || cleanCode.length !== 4) {
+      res.status(400).json({
+        success: false,
+        verified: false,
+        message: 'Please enter a valid 4-digit verification code.',
+      });
+      return;
+    }
+
+    const store = readVerifications();
+    const record = store[cleanEmail];
+    if (!record) {
+      res.status(400).json({
+        success: false,
+        verified: false,
+        message: 'No active verification code found for this Email ID. Please request a new 4-digit code.',
+      });
+      return;
+    }
+
+    if (Date.now() > record.expiresAt) {
+      res.status(400).json({
+        success: false,
+        verified: false,
+        message: 'This 4-digit verification code has expired. Please request a new code.',
+      });
+      return;
+    }
+
+    if (record.code !== cleanCode) {
+      res.status(400).json({
+        success: false,
+        verified: false,
+        message: 'Incorrect 4-digit verification code. Please check the 4 digits and try again.',
+      });
+      return;
+    }
+
+    const nowIso = new Date().toISOString();
+    store[cleanEmail] = {
+      ...record,
+      verified: true,
+      verifiedAt: nowIso,
+    };
+    writeVerifications(store);
+
+    // Fetch any existing mirrored workspace from the Cloud Vault for this verified Email ID
+    const vault = readVault();
+    const existingData = vault[cleanEmail] || null;
+
+    res.json({
+      success: true,
+      verified: true,
+      verifiedAt: nowIso,
+      data: existingData,
+      message: `Email ID (${cleanEmail}) verified! Automatic Google Drive & Multi-Device Mirroring is now active.`,
+    });
+  });
+
+  app.get('/api/email-verify/status/:email', (req, res) => {
+    const cleanEmail = (req.params.email || '').toLowerCase().trim();
+    const store = readVerifications();
+    const rec = store[cleanEmail];
+    res.json({
+      success: true,
+      email: cleanEmail,
+      verified: !!rec?.verified,
+      verifiedAt: rec?.verifiedAt || null,
     });
   });
 

@@ -20,9 +20,15 @@ import {
   ShieldCheck,
   X,
   PenTool,
-  Stamp
+  Stamp,
+  FileText
 } from 'lucide-react';
-import { downloadElementAsPdf, printElementDirectly } from '../utils/pdfExport';
+import {
+  downloadElementAsPdf,
+  printElementDirectly,
+  exportStatementToPdf,
+  exportClearanceCertificateToPdf
+} from '../utils/pdfExport';
 import { LanguageCode, getTranslation } from '../utils/translations';
 import { isInvoiceOverdue, getCurrencySymbol } from '../utils/currency';
 
@@ -101,6 +107,9 @@ export const Statements: React.FC<StatementsProps> = ({
 
   // Export & Certificate Modal State
   const [isExportingPdf, setIsExportingPdf] = useState<boolean>(false);
+  const [pdfExportSuccess, setPdfExportSuccess] = useState<boolean>(false);
+  const [pdfOrientation, setPdfOrientation] = useState<'portrait' | 'landscape'>('portrait');
+  const [isExportingCertificatePdf, setIsExportingCertificatePdf] = useState<boolean>(false);
   const [showCertificateModal, setShowCertificateModal] = useState<boolean>(false);
 
   const t = (key: string, fallback?: string) => getTranslation(language, key, fallback);
@@ -540,21 +549,65 @@ export const Statements: React.FC<StatementsProps> = ({
     });
   };
 
-  const handleDownloadPdf = async () => {
+  const handleDownloadPdf = async (orientationOverride?: 'portrait' | 'landscape') => {
     if (isExportingPdf) return;
     setIsExportingPdf(true);
+    setPdfExportSuccess(false);
     const scopeName = selectedClient
-      ? (selectedClient.company || selectedClient.name).replace(/\s+/g, '_')
+      ? (selectedClient.company || selectedClient.name).replace(/[^a-zA-Z0-9_-]/g, '_')
       : 'All_Clients';
+    const filename = `Statement_of_Account_${scopeName}_${new Date().toISOString().split('T')[0]}.pdf`;
     try {
-      await downloadElementAsPdf(
-        'standard-statement-sheet',
-        `Statement_of_Account_${scopeName}_${new Date().toISOString().split('T')[0]}.pdf`
-      );
+      const ok = await exportStatementToPdf({
+        ledgerSource,
+        viewMode,
+        selectedClient,
+        periodLabel,
+        statusFilter,
+        selectedCategory,
+        searchQuery,
+        currencyCode,
+        currencySymbol,
+        settings,
+        applySignature,
+        applySeal,
+        summary,
+        ledgerRows,
+        monthWiseGroups,
+        categoryWiseRows,
+        orientation: orientationOverride || pdfOrientation,
+        filename
+      });
+      if (ok) {
+        setPdfExportSuccess(true);
+        setTimeout(() => setPdfExportSuccess(false), 2600);
+      }
     } catch (e) {
-      console.error('Statement PDF export error:', e);
+      console.error('Statement jsPDF export error, falling back to DOM PDF capture:', e);
+      await downloadElementAsPdf('standard-statement-sheet', filename);
     } finally {
       setIsExportingPdf(false);
+    }
+  };
+
+  const handleDownloadCertificatePdf = async () => {
+    if (isExportingCertificatePdf) return;
+    setIsExportingCertificatePdf(true);
+    try {
+      await exportClearanceCertificateToPdf({
+        selectedClient,
+        periodLabel,
+        totalInvoiced: summary.totalInvoiced,
+        currencyCode,
+        currencySymbol,
+        settings,
+        applySignature,
+        applySeal
+      });
+    } catch (e) {
+      console.error('Clearance certificate PDF error:', e);
+    } finally {
+      setIsExportingCertificatePdf(false);
     }
   };
 
@@ -717,15 +770,47 @@ export const Statements: React.FC<StatementsProps> = ({
               <span>Print</span>
             </button>
 
-            <button
-              type="button"
-              onClick={handleDownloadPdf}
-              disabled={isExportingPdf}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black shadow-xs transition-colors disabled:opacity-50"
-            >
-              {isExportingPdf ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
-              <span>{isExportingPdf ? 'Exporting...' : 'Download PDF'}</span>
-            </button>
+            {/* PDF Page Orientation + Direct jsPDF Export Control */}
+            <div className="inline-flex items-center rounded-xl bg-slate-100 dark:bg-slate-800 p-0.5 border border-slate-200 dark:border-slate-700">
+              <select
+                value={pdfOrientation}
+                onChange={e => setPdfOrientation(e.target.value as 'portrait' | 'landscape')}
+                title="PDF Page Orientation"
+                className="bg-transparent px-2.5 py-1.5 text-[11px] font-bold text-slate-700 dark:text-slate-200 outline-none cursor-pointer"
+              >
+                <option value="portrait" className="bg-white dark:bg-slate-900">
+                  A4 Portrait
+                </option>
+                <option value="landscape" className="bg-white dark:bg-slate-900">
+                  A4 Landscape
+                </option>
+              </select>
+              <button
+                type="button"
+                onClick={() => handleDownloadPdf()}
+                disabled={isExportingPdf}
+                className={`inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-white text-xs font-black shadow-xs transition-colors disabled:opacity-50 ${
+                  pdfExportSuccess
+                    ? 'bg-emerald-600 hover:bg-emerald-700'
+                    : 'bg-indigo-600 hover:bg-indigo-700'
+                }`}
+              >
+                {isExportingPdf ? (
+                  <Loader2 size={14} className="animate-spin" />
+                ) : pdfExportSuccess ? (
+                  <Check size={14} />
+                ) : (
+                  <Download size={14} />
+                )}
+                <span>
+                  {isExportingPdf
+                    ? 'Exporting PDF...'
+                    : pdfExportSuccess
+                    ? 'PDF Downloaded'
+                    : 'Export PDF'}
+                </span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1519,6 +1604,19 @@ export const Statements: React.FC<StatementsProps> = ({
                 </h3>
               </div>
               <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleDownloadCertificatePdf}
+                  disabled={isExportingCertificatePdf}
+                  className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-xs font-bold text-white flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {isExportingCertificatePdf ? (
+                    <Loader2 size={13} className="animate-spin" />
+                  ) : (
+                    <FileText size={13} />
+                  )}
+                  <span>Download PDF</span>
+                </button>
                 <button
                   type="button"
                   onClick={() =>

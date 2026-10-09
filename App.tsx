@@ -24,7 +24,8 @@ import {
   Mail,
   X,
   Smartphone,
-  HardDrive
+  HardDrive,
+  ShieldCheck
 } from 'lucide-react';
 import {
   View,
@@ -57,7 +58,9 @@ import {
   getLinkedDriveAccount,
   setLinkedDriveAccount,
   gatherAppBackupPayload,
-  backupDirectlyToGoogleDrive
+  backupDirectlyToGoogleDrive,
+  isEmailVerified,
+  markEmailVerified
 } from './services/driveService';
 import {
   signInWithGoogleDrive,
@@ -77,6 +80,7 @@ import Settings from './components/Settings';
 import ExpenseTracker from './components/ExpenseTracker';
 import Login from './components/Login';
 import FloatingAIChat from './components/FloatingAIChat';
+import EmailVerificationModal from './components/EmailVerificationModal';
 
 const App: React.FC = () => {
   const [users, setUsers] = useState<UserAccount[]>(() => loadStoredUsers());
@@ -124,6 +128,9 @@ const App: React.FC = () => {
   const [showLanguageDropdown, setShowLanguageDropdown] = useState(false);
   const [activeView, setActiveView] = useState<View>('dashboard');
   const [isSyncing, setIsSyncing] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const isInitialMountRef = useRef<boolean>(true);
+  const saveBlinkTimeoutRef = useRef<number | null>(null);
   const [isOnline, setIsOnline] = useState<boolean>(() =>
     typeof navigator !== 'undefined' ? navigator.onLine : true
   );
@@ -274,21 +281,39 @@ const App: React.FC = () => {
     };
   }, [activeSyncEmail]);
 
-  // Automatic Pull from Cloud & Google Drive when User Logs In or Email is Linked
+  // Automatic Pull from Cloud & Google Drive when User Logs In or Email is Linked + Real-Time Live Mirroring
   const hasInitialPulledRef = useRef<string>('');
   useEffect(() => {
     const emailToSync = (user?.email || settings.driveSyncEmail || getLinkedDriveAccount() || '').trim().toLowerCase();
-    if (!emailToSync || hasInitialPulledRef.current === emailToSync) return;
-    hasInitialPulledRef.current = emailToSync;
-    setSyncEmailInput(emailToSync);
+    if (!emailToSync) return;
 
-    pullFromCloudAndDriveByEmail(emailToSync, 'merge')
-      .then(res => {
-        if (res.success && res.data) {
-          handleRestoreAllData(res.data);
-        }
-      })
-      .catch(err => console.warn('Initial email sync check:', err));
+    if (hasInitialPulledRef.current !== emailToSync) {
+      hasInitialPulledRef.current = emailToSync;
+      setSyncEmailInput(emailToSync);
+
+      pullFromCloudAndDriveByEmail(emailToSync, 'merge')
+        .then(res => {
+          if (res.success && res.data) {
+            handleRestoreAllData(res.data);
+          }
+        })
+        .catch(err => console.warn('Initial email sync check:', err));
+    }
+
+    // Continuous Real-Time Background Mirroring once Email ID is verified
+    const mirrorInterval = window.setInterval(() => {
+      if (isEmailVerified(emailToSync) && (typeof navigator === 'undefined' || navigator.onLine)) {
+        pullFromCloudAndDriveByEmail(emailToSync, 'merge')
+          .then(res => {
+            if (res.success && res.data) {
+              handleRestoreAllData(res.data);
+            }
+          })
+          .catch(() => {});
+      }
+    }, 15000);
+
+    return () => window.clearInterval(mirrorInterval);
   }, [user?.email, settings.driveSyncEmail]);
 
   const toggleTheme = () => {
@@ -298,6 +323,19 @@ const App: React.FC = () => {
   const t = (key: string, fallback?: string) => getTranslation(language, key, fallback);
   const currentLangObj =
     SUPPORTED_LANGUAGES.find(l => l.code === language) || SUPPORTED_LANGUAGES[0];
+
+  const triggerSaveBlink = () => {
+    if (saveBlinkTimeoutRef.current) {
+      window.clearTimeout(saveBlinkTimeoutRef.current);
+    }
+    setSaveStatus('saving');
+    window.setTimeout(() => {
+      setSaveStatus('saved');
+      saveBlinkTimeoutRef.current = window.setTimeout(() => {
+        setSaveStatus('idle');
+      }, 2200);
+    }, 350);
+  };
 
   // Persistence Saving to Local Device Storage + Automatic Background Cloud & Drive Sync
   useEffect(() => {
@@ -312,8 +350,22 @@ const App: React.FC = () => {
     localStorage.setItem('cf_settings', JSON.stringify(settings));
     saveStoredUsers(users);
 
+    if (isInitialMountRef.current) {
+      isInitialMountRef.current = false;
+    } else {
+      setSaveStatus('saving');
+    }
+
     const timer = setTimeout(() => {
       setIsSyncing(false);
+      setSaveStatus(prev => (prev === 'saving' ? 'saved' : prev));
+      if (saveBlinkTimeoutRef.current) {
+        window.clearTimeout(saveBlinkTimeoutRef.current);
+      }
+      saveBlinkTimeoutRef.current = window.setTimeout(() => {
+        setSaveStatus('idle');
+      }, 2200);
+
       const emailToSync = (
         user?.email ||
         settings.driveSyncEmail ||
@@ -340,7 +392,7 @@ const App: React.FC = () => {
         };
         syncToGoogleDriveCloud(emailToSync, payload).catch(() => {});
       }
-    }, 900);
+    }, 550);
 
     return () => clearTimeout(timer);
   }, [invoices, expenses, clients, staffList, staffAdvances, staffAttendance, categories, settings, users, user?.email]);
@@ -493,7 +545,7 @@ const App: React.FC = () => {
     }
   };
 
-  const navItemsList: { view: View; icon: React.ReactNode; label: string }[] = [
+  const allNavItems: { view: View; icon: React.ReactNode; label: string }[] = [
     { view: 'dashboard', icon: <LayoutDashboard size={18} />, label: t('nav.dashboard', 'Dashboard') },
     { view: 'invoices', icon: <FileText size={18} />, label: t('nav.invoices', 'Invoices & Proforma') },
     { view: 'statements', icon: <ClipboardList size={18} />, label: t('nav.statements', 'Statements') },
@@ -503,6 +555,10 @@ const App: React.FC = () => {
     { view: 'ai-helper', icon: <Sparkles size={18} />, label: t('nav.ai_advisor', 'AI Advisor') },
     { view: 'settings', icon: <SettingsIcon size={18} />, label: t('nav.settings', 'Settings') }
   ];
+
+  const navItemsList = allNavItems.filter(
+    item => item.view !== 'ai-helper' || settings.aiNavEnabled !== false
+  );
 
   const NavItem: React.FC<{ view: View; icon: React.ReactNode; label: string; mobile?: boolean }> = ({
     view,
@@ -690,29 +746,76 @@ const App: React.FC = () => {
               />
             </div>
 
-            {/* Multi-Device Email & Google Drive Sync Status Button */}
+            {/* Multi-Device Email 4-Digit Verification & Google Drive Mirror Status Button */}
             <button
               onClick={() => setShowSyncModal(true)}
-              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:hover:bg-indigo-900/60 border border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300 text-[11px] font-black transition-all truncate max-w-[180px] sm:max-w-[240px]"
-              title="Click to manage Email ID & Google Drive Multi-Device Sync"
+              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border text-[11px] font-black transition-all truncate max-w-[190px] sm:max-w-[260px] ${
+                activeSyncEmail && isEmailVerified(activeSyncEmail)
+                  ? 'bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/60 dark:hover:bg-emerald-900/60 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300'
+                  : 'bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:hover:bg-indigo-900/60 border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300'
+              }`}
+              title="Click to verify Email ID with 4-digit code & mirror Google Drive"
             >
-              <Cloud size={13} className={isSyncing ? 'animate-bounce' : ''} />
+              {activeSyncEmail && isEmailVerified(activeSyncEmail) ? (
+                <ShieldCheck size={13} className="text-emerald-600 shrink-0" />
+              ) : (
+                <Cloud size={13} className={isSyncing ? 'animate-bounce shrink-0' : 'shrink-0'} />
+              )}
               <span className="truncate">
-                {activeSyncEmail ? activeSyncEmail : 'Link Email & Drive Sync'}
+                {activeSyncEmail
+                  ? isEmailVerified(activeSyncEmail)
+                    ? `${activeSyncEmail} (Verified)`
+                    : `${activeSyncEmail} (Verify 4-Digit)`
+                  : 'Verify Email (4-Digit) & Sync'}
               </span>
             </button>
 
-            {/* Online / Offline Badge */}
-            <div
-              className={`hidden md:flex items-center space-x-1 px-2.5 py-1 rounded-full text-[10px] font-black uppercase ${
-                isOnline
-                  ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
-                  : 'bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300'
-              }`}
-            >
-              {isOnline ? <Wifi size={11} /> : <WifiOff size={11} />}
-              <span>{isOnline ? 'Online + Local' : 'Offline Ready'}</span>
-            </div>
+            {/* Attractive Sync & Save Blink Symbol (Replaces "Online + Local" text) */}
+            {settings.headerStatusMode !== 'hidden' && (
+              <button
+                type="button"
+                onClick={triggerSaveBlink}
+                title={
+                  saveStatus === 'saving'
+                    ? 'Saving changes...'
+                    : saveStatus === 'saved'
+                    ? 'Saved! All changes synced'
+                    : isOnline
+                    ? 'Synced & Saved (Click to verify save blink)'
+                    : 'Offline Local Vault Active'
+                }
+                className={`relative flex items-center justify-center rounded-full transition-all duration-300 ${
+                  saveStatus === 'saved'
+                    ? 'px-2.5 h-8 bg-emerald-500 text-white shadow-lg shadow-emerald-500/40 scale-105 ring-4 ring-emerald-400/30 animate-pulse'
+                    : saveStatus === 'saving'
+                    ? 'w-8 h-8 bg-indigo-50 dark:bg-indigo-950/80 text-indigo-600 dark:text-indigo-400 border border-indigo-300 dark:border-indigo-700'
+                    : isOnline
+                    ? 'w-8 h-8 bg-emerald-50/90 hover:bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 border border-emerald-200/80 dark:border-emerald-800/80'
+                    : 'w-8 h-8 bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 border border-amber-200 dark:border-amber-800'
+                }`}
+              >
+                {/* Blinking Ripple Ring on Save Done */}
+                {saveStatus === 'saved' && (
+                  <span className="absolute inset-0 rounded-full bg-emerald-400 opacity-60 animate-ping" />
+                )}
+
+                {saveStatus === 'saving' ? (
+                  <RefreshCw size={13} className="animate-spin relative z-10" />
+                ) : saveStatus === 'saved' ? (
+                  <div className="relative z-10 flex items-center space-x-1">
+                    <CheckCircle2 size={14} className="text-white" />
+                    <span className="text-[10px] font-black uppercase tracking-wider">Saved</span>
+                  </div>
+                ) : isOnline ? (
+                  <div className="relative flex items-center justify-center">
+                    <CheckCircle2 size={14} />
+                    <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                  </div>
+                ) : (
+                  <WifiOff size={13} />
+                )}
+              </button>
+            )}
           </div>
 
           <div className="flex items-center space-x-2 sm:space-x-3 shrink-0">
@@ -963,6 +1066,9 @@ const App: React.FC = () => {
               clients={clients}
               expenses={expenses}
               settings={settings}
+              onUpdateSettings={partial => setSettings(prev => ({ ...prev, ...partial }))}
+              onTriggerTestBlink={triggerSaveBlink}
+              language={language}
             />
           )}
 
@@ -975,6 +1081,7 @@ const App: React.FC = () => {
               onUpdateUsers={setUsers}
               onUpdateCurrentUser={handleUpdateCurrentUser}
               onRestoreData={handleRestoreAllData}
+              onTriggerTestBlink={triggerSaveBlink}
               language={language}
             />
           )}
@@ -1008,109 +1115,36 @@ const App: React.FC = () => {
         </nav>
       </main>
 
-      {/* MULTI-DEVICE EMAIL ID + GOOGLE DRIVE + LOCAL OFFLINE SYNC MODAL */}
-      {showSyncModal && (
-        <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-5 animate-in zoom-in-95 duration-200">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-4">
-              <div className="flex items-center space-x-3">
-                <div className="w-11 h-11 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-md">
-                  <Cloud size={22} />
-                </div>
-                <div>
-                  <h3 className="text-base font-black text-slate-900 dark:text-white">
-                    PC & Mobile Multi-Device Email Sync
-                  </h3>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
-                    Link your Email ID & Google Drive — unlimited PC and Mobile devices.
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowSyncModal(false)}
-                className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-white rounded-xl"
-              >
-                <X size={20} />
-              </button>
-            </div>
-
-            {syncStatusMsg && (
-              <div className="p-3.5 rounded-2xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 text-indigo-800 dark:text-indigo-200 text-xs font-bold flex items-center space-x-2">
-                <CheckCircle2 size={16} className="text-indigo-600 shrink-0" />
-                <span>{syncStatusMsg}</span>
-              </div>
-            )}
-
-            <form onSubmit={handleManualEmailSync} className="space-y-3">
-              <label className="block text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                Linked Email ID (Use Same Email on PC & Mobile)
-              </label>
-              <div className="flex flex-col sm:flex-row gap-2">
-                <div className="relative flex-1">
-                  <Mail size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                  <input
-                    type="email"
-                    required
-                    value={syncEmailInput}
-                    onChange={e => setSyncEmailInput(e.target.value)}
-                    placeholder="Enter your email (e.g. user@company.com)"
-                    className="w-full pl-9 pr-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-                <button
-                  type="submit"
-                  disabled={isPullingCloud}
-                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-black text-xs flex items-center justify-center space-x-1.5 shadow-md disabled:opacity-50"
-                >
-                  <RefreshCw size={14} className={isPullingCloud ? 'animate-spin' : ''} />
-                  <span>{isPullingCloud ? 'Syncing...' : 'Sync Email Now'}</span>
-                </button>
-              </div>
-              <p className="text-[11px] text-slate-400 leading-relaxed">
-                Any PC or Mobile device logged in with this Email ID automatically pulls your invoices, proformas, clients, expenses, and settings while keeping a full offline copy on your device.
-              </p>
-            </form>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-100 dark:border-slate-800">
-              <button
-                type="button"
-                onClick={handleConnectGoogleDriveQuick}
-                disabled={isPullingCloud}
-                className="p-3.5 rounded-2xl bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 flex items-center space-x-3 text-left transition-all"
-              >
-                <HardDrive size={20} className="text-emerald-600 shrink-0" />
-                <div>
-                  <p className="text-xs font-black text-slate-900 dark:text-white">
-                    {driveConnected ? 'Google Drive Connected' : 'Connect Google Drive'}
-                  </p>
-                  <p className="text-[10px] text-slate-500">
-                    Auto-sync master file to your Google Drive
-                  </p>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={async () => {
-                  const msg = await shareLocalDataOffline(syncEmailInput || activeSyncEmail);
-                  setSyncStatusMsg(msg);
-                }}
-                className="p-3.5 rounded-2xl bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 flex items-center space-x-3 text-left transition-all"
-              >
-                <Share2 size={20} className="text-purple-600 shrink-0" />
-                <div>
-                  <p className="text-xs font-black text-slate-900 dark:text-white">
-                    Local Device Share (Offline)
-                  </p>
-                  <p className="text-[10px] text-slate-500">
-                    Send data via AirDrop, Nearby Share, or File
-                  </p>
-                </div>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 4-DIGIT EMAIL VERIFICATION + AUTOMATIC GOOGLE DRIVE MIRROR MODAL */}
+      <EmailVerificationModal
+        isOpen={showSyncModal}
+        onClose={() => setShowSyncModal(false)}
+        initialEmail={activeSyncEmail}
+        driveConnected={driveConnected}
+        onConnectGoogleDrive={handleConnectGoogleDriveQuick}
+        isSyncingExternal={isPullingCloud}
+        onVerifiedAndMirrored={(verifiedEmail, payload) => {
+          markEmailVerified(verifiedEmail);
+          setSyncEmailInput(verifiedEmail);
+          setLinkedDriveAccount(verifiedEmail);
+          setSettings(prev => ({
+            ...prev,
+            driveSyncEmail: verifiedEmail,
+            autoDriveSync: true
+          }));
+          if (user && !user.email) {
+            handleUpdateCurrentUser({ ...user, email: verifiedEmail });
+          }
+          if (payload) {
+            handleRestoreAllData(payload);
+          }
+          triggerSaveBlink();
+        }}
+        onManualSyncNow={async () => {
+          await handleManualEmailSync();
+          triggerSaveBlink();
+        }}
+      />
 
       {/* Persistent Floating Gemini & Offline AI Chatbot Widget */}
       {activeView !== 'ai-helper' && (
@@ -1119,6 +1153,8 @@ const App: React.FC = () => {
           expenses={expenses}
           clients={clients}
           settings={settings}
+          onUpdateSettings={partial => setSettings(prev => ({ ...prev, ...partial }))}
+          onTriggerTestBlink={triggerSaveBlink}
         />
       )}
     </div>

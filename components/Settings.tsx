@@ -45,6 +45,7 @@ import {
 } from 'lucide-react';
 import UserManagementSettings from './UserManagementSettings';
 import SignatureSealSettingsSection from './SignatureSealSettingsSection';
+import AICustomizationPanel from './AICustomizationPanel';
 import { 
   gatherAppBackupPayload, 
   downloadLocalBackupJSON, 
@@ -79,6 +80,7 @@ interface SettingsProps {
   onUpdateUsers?: (newUsers: UserAccount[]) => void;
   onUpdateCurrentUser?: (updatedUser: UserAccount) => void;
   onRestoreData?: (payload: AppBackupPayload) => void;
+  onTriggerTestBlink?: () => void;
   language?: LanguageCode;
 }
 
@@ -129,9 +131,10 @@ export const Settings: React.FC<SettingsProps> = ({
   onUpdateUsers,
   onUpdateCurrentUser,
   onRestoreData,
+  onTriggerTestBlink,
   language = 'en'
 }) => {
-  const [activeTab, setActiveTab] = useState<'company' | 'signature' | 'users' | 'backup'>('company');
+  const [activeTab, setActiveTab] = useState<'company' | 'signature' | 'ai' | 'users' | 'backup'>('company');
   const [formData, setFormData] = useState<CompanySettings>(settings);
   const [isSavedModalOpen, setIsSavedModalOpen] = useState(false);
   const [saveToast, setSaveToast] = useState<{ show: boolean; msg?: string; type?: 'success' | 'error' }>({ show: false });
@@ -693,6 +696,19 @@ export const Settings: React.FC<SettingsProps> = ({
 
         <button
           type="button"
+          onClick={() => setActiveTab('ai')}
+          className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${
+            activeTab === 'ai'
+              ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-white/50 dark:hover:bg-slate-700/50'
+          }`}
+        >
+          <Sparkles size={16} className={activeTab === 'ai' ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400'} />
+          <span>AI &amp; Interface</span>
+        </button>
+
+        <button
+          type="button"
           onClick={() => setActiveTab('users')}
           className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${
             activeTab === 'users'
@@ -742,6 +758,23 @@ export const Settings: React.FC<SettingsProps> = ({
             </button>
           </div>
         </form>
+      )}
+
+      {/* ========================================================================= */}
+      {/* TAB: AI & INTERFACE CUSTOMIZATION TAB */}
+      {/* ========================================================================= */}
+      {activeTab === 'ai' && (
+        <div className="space-y-6 animate-in fade-in">
+          <AICustomizationPanel
+            settings={formData}
+            onUpdateSettings={partial => {
+              const updated = { ...formData, ...partial };
+              setFormData(updated);
+              onUpdate(updated);
+            }}
+            onTriggerTestBlink={onTriggerTestBlink}
+          />
+        </div>
       )}
 
       {/* ========================================================================= */}

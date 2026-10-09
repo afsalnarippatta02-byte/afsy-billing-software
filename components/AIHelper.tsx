@@ -11,18 +11,23 @@ import {
   Bot,
   Mail,
   PieChart,
-  ShieldAlert
+  ShieldAlert,
+  Sliders
 } from 'lucide-react';
 import { Invoice, Client, Expense, CompanySettings } from '../types';
 import { geminiService } from '../services/geminiService';
 import AIChatBot from './AIChatBot';
+import AICustomizationPanel from './AICustomizationPanel';
 import { LanguageCode, getTranslation } from '../utils/translations';
+import { getCurrencySymbol } from '../utils/currency';
 
 interface AIHelperProps {
   invoices: Invoice[];
   clients: Client[];
   expenses?: Expense[];
   settings?: CompanySettings;
+  onUpdateSettings?: (partial: Partial<CompanySettings>) => void;
+  onTriggerTestBlink?: () => void;
   language?: LanguageCode;
 }
 
@@ -31,9 +36,11 @@ export const AIHelper: React.FC<AIHelperProps> = ({
   clients, 
   expenses = [], 
   settings,
+  onUpdateSettings,
+  onTriggerTestBlink,
   language = 'en'
 }) => {
-  const [activeTab, setActiveTab] = useState<'chat' | 'strategy' | 'emails'>('chat');
+  const [activeTab, setActiveTab] = useState<'chat' | 'strategy' | 'emails' | 'customize'>('chat');
   const [insights, setInsights] = useState<string[]>([]);
   const [isLoadingInsights, setIsLoadingInsights] = useState(false);
   const [draftEmail, setDraftEmail] = useState('');
@@ -42,6 +49,7 @@ export const AIHelper: React.FC<AIHelperProps> = ({
   const [isLoadingEmail, setIsLoadingEmail] = useState(false);
 
   const t = (key: string, fallback?: string) => getTranslation(language, key, fallback);
+  const currSym = getCurrencySymbol(settings?.defaultCurrency || 'AED');
 
   const generateInsights = async () => {
     setIsLoadingInsights(true);
@@ -125,8 +133,29 @@ export const AIHelper: React.FC<AIHelperProps> = ({
             <Mail size={16} />
             <span>Email Drafter</span>
           </button>
+          <button
+            onClick={() => setActiveTab('customize')}
+            className={`px-5 py-2.5 rounded-xl font-black text-xs uppercase tracking-wider transition-all flex items-center space-x-2 ${
+              activeTab === 'customize'
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200 dark:shadow-none'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-800'
+            }`}
+          >
+            <Sliders size={16} />
+            <span>Customize AI</span>
+          </button>
         </div>
       </div>
+
+      {activeTab === 'customize' && settings && onUpdateSettings && (
+        <div className="max-w-4xl">
+          <AICustomizationPanel
+            settings={settings}
+            onUpdateSettings={onUpdateSettings}
+            onTriggerTestBlink={onTriggerTestBlink}
+          />
+        </div>
+      )}
 
       {/* Main View Area */}
       {activeTab === 'chat' && (
@@ -180,7 +209,7 @@ export const AIHelper: React.FC<AIHelperProps> = ({
                 </div>
                 <div className="flex justify-between items-center py-1.5 border-b border-slate-100 dark:border-slate-800">
                   <span className="text-xs text-slate-500 dark:text-slate-400 font-bold">Operating Expenses</span>
-                  <span className="text-xs font-black text-rose-600 dark:text-rose-400">AED {expenses.reduce((s, e) => s + e.amount, 0).toLocaleString()}</span>
+                  <span className="text-xs font-black text-rose-600 dark:text-rose-400">{currSym} {expenses.reduce((s, e) => s + e.amount, 0).toLocaleString()}</span>
                 </div>
                 <div className="flex justify-between items-center py-1.5">
                   <span className="text-xs text-slate-500 dark:text-slate-400 font-bold">UAE VAT Rate</span>
@@ -256,7 +285,7 @@ export const AIHelper: React.FC<AIHelperProps> = ({
             </div>
 
             <div>
-              <label className="text-xs font-black text-slate-400 uppercase tracking-widest block mb-2">Pending Amount (AED)</label>
+              <label className="text-xs font-black text-slate-400 uppercase tracking-widest block mb-2">Pending Amount ({currSym})</label>
               <input 
                 type="number"
                 value={emailAmount}

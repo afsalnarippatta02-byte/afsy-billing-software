@@ -156,9 +156,11 @@ const AIChatBot: React.FC<AIChatBotProps> = ({
     setIsLoading(true);
 
     try {
+      const effectiveModel: GeminiModelType =
+        settings?.aiDefaultMode === 'offline' ? 'local-offline-ai' : selectedModel;
       const response = await geminiService.sendChatMessage({
         messages: newMessages,
-        model: selectedModel,
+        model: effectiveModel,
         systemInstruction: customSystemInstruction,
         contextPayload: includeBusinessContext ? {
           invoices,
@@ -200,17 +202,15 @@ const AIChatBot: React.FC<AIChatBotProps> = ({
   };
 
   const handleClearHistory = () => {
-    if (window.confirm('Clear conversation history for this persona?')) {
-      const initial: ChatMessage = {
-        id: `welcome-${Date.now()}`,
-        role: 'model',
-        text: `Conversation reset. I am your **${selectedRole.name}**. How can I help?`,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        modelUsed: selectedModel,
-        rolePreset: selectedRole.name,
-      };
-      setMessages([initial]);
-    }
+    const initial: ChatMessage = {
+      id: `welcome-${Date.now()}`,
+      role: 'model',
+      text: `Conversation reset. I am your **${selectedRole.name}**. How can I help?`,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      modelUsed: selectedModel,
+      rolePreset: selectedRole.name,
+    };
+    setMessages([initial]);
   };
 
   const handleExportChat = () => {
