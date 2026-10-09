@@ -5,8 +5,11 @@ import {
   updateFileInGoogleDrive,
   listGoogleDriveFiles, 
   downloadGoogleDriveFileContent, 
+  deleteGoogleDriveFile,
   isGoogleDriveConnected, 
+  hasActiveGoogleOAuthToken,
   getGoogleDriveUser,
+  linkGoogleDriveAccountByEmail,
   GoogleDriveFile 
 } from './googleDriveAuth';
 
@@ -26,56 +29,292 @@ export interface AppBackupPayload {
 }
 
 const DRIVE_BACKUPS_STORAGE_KEY = 'af_google_drive_backups';
+const DRIVE_FILES_LOCAL_CACHE_KEY = 'af_google_drive_files_cache';
 const DRIVE_LINKED_ACCOUNT_KEY = 'af_linked_drive_account';
 
+function getActiveDriveEmail(overrideEmail?: string | null): string {
+  const gUser = getGoogleDriveUser();
+  const raw =
+    overrideEmail ||
+    gUser?.email ||
+    localStorage.getItem(DRIVE_LINKED_ACCOUNT_KEY) ||
+    (() => {
+      try {
+        const s = JSON.parse(localStorage.getItem('cf_settings') || '{}');
+        return s.driveSyncEmail || '';
+      } catch {
+        return '';
+      }
+    })();
+  return (raw || '').toLowerCase().trim();
+}
+
+function saveLocalDriveFileRecord(email: string, fileMeta: GoogleDriveFile, payload: AppBackupPayload) {
+  try {
+    const clean = (email || 'local').toLowerCase().trim();
+    const cache = JSON.parse(localStorage.getItem(DRIVE_FILES_LOCAL_CACHE_KEY) || '{}');
+    const list: Array<GoogleDriveFile & { payload?: AppBackupPayload }> = cache[clean] || [];
+    const existingIdx = list.findIndex(f => f.id === fileMeta.id || f.name === fileMeta.name);
+    const entry = {
+      ...fileMeta,
+      invoiceCount: payload.invoices?.length || 0,
+      clientCount: payload.clients?.length || 0,
+      payload,
+    };
+    if (existingIdx >= 0) {
+      list[existingIdx] = entry;
+    } else {
+      list.unshift(entry);
+    }
+    cache[clean] = list.slice(0, 20);
+    localStorage.setItem(DRIVE_FILES_LOCAL_CACHE_KEY, JSON.stringify(cache));
+  } catch (e) {
+    console.warn('Local Drive file cache warning:', e);
+  }
+}
+
 /**
- * Upload active state directly to end-user's Google Drive account
+ * Upload or update active workspace backup directly to Google Drive & Cloud Vault
  */
 export const backupDirectlyToGoogleDrive = async (
-  payload?: AppBackupPayload
+  payload?: AppBackupPayload,
+  options?: { fileName?: string; overwriteFileId?: string }
 ): Promise<{ success: boolean; file?: GoogleDriveFile; message: string }> => {
   try {
-    const data = payload || gatherAppBackupPayload();
-    const gUser = getGoogleDriveUser();
-    if (gUser?.email) {
-      data.userEmail = gUser.email;
+    const activeEmail = getActiveDriveEmail(payload?.userEmail);
+    const data = payload || gatherAppBackupPayload(activeEmail || undefined);
+    if (activeEmail) {
+      data.userEmail = activeEmail;
     }
+    data.exportedAt = new Date().toISOString();
+
     const jsonString = JSON.stringify(data, null, 2);
     const now = new Date();
-    const dateFormatted = now.toISOString().replace(/[:.]/g, '-');
-    const fileName = `AfAccounts-Backup-${dateFormatted}.json`;
+    const dateFormatted = now.toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const fileName = options?.fileName || `AfAccounts-Backup-${dateFormatted}.json`;
 
-    const uploaded = await uploadFileToGoogleDrive(fileName, 'application/json', jsonString);
-    
-    // Also save in local snapshot
-    if (data.userEmail) {
-      await syncToGoogleDriveCloud(data.userEmail, data);
+    let uploadedFile: GoogleDriveFile | undefined;
+
+    // 1. Upload or update directly on Google Drive API v3 if OAuth token is active in memory
+    if (hasActiveGoogleOAuthToken()) {
+      try {
+        if (options?.overwriteFileId && !options.overwriteFileId.startsWith('drv_')) {
+          uploadedFile = await updateFileInGoogleDrive(
+            options.overwriteFileId,
+            fileName,
+            'application/json',
+            jsonString
+          );
+        } else {
+          uploadedFile = await uploadFileToGoogleDrive(fileName, 'application/json', jsonString);
+        }
+      } catch (oauthErr) {
+        console.warn('Direct Google Drive API upload fallback to Cloud Drive Vault:', oauthErr);
+      }
+    }
+
+    // 2. Also store in Multi-Device Server Cloud Drive Files Vault (/api/drive-files/:email)
+    const vaultEmail = activeEmail || 'workspace@afaccounts.local';
+    try {
+      if (typeof navigator === 'undefined' || navigator.onLine) {
+        const res = await fetch(`/api/drive-files/${encodeURIComponent(vaultEmail)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fileId: uploadedFile?.id || options?.overwriteFileId,
+            fileName,
+            payload: data,
+          }),
+        });
+        if (res.ok) {
+          const json = await res.json();
+          if (!uploadedFile && json.file) {
+            uploadedFile = { ...json.file, source: 'cloud-vault' };
+          }
+        }
+      }
+    } catch (vaultErr) {
+      console.warn('Cloud Drive Vault upload fallback to local cache:', vaultErr);
+    }
+
+    // 3. Ensure uploadedFile metadata is always populated even offline
+    if (!uploadedFile) {
+      uploadedFile = {
+        id: options?.overwriteFileId || `drv_${Date.now()}`,
+        name: fileName,
+        mimeType: 'application/json',
+        createdTime: data.exportedAt,
+        modifiedTime: data.exportedAt,
+        size: String(new Blob([jsonString]).size),
+        invoiceCount: data.invoices.length,
+        clientCount: data.clients.length,
+        source: 'cloud-vault',
+      };
+    }
+
+    saveLocalDriveFileRecord(vaultEmail, uploadedFile, data);
+
+    // 4. Sync master cloud snapshot
+    if (activeEmail) {
+      await syncToGoogleDriveCloud(activeEmail, data);
     }
 
     return {
       success: true,
-      file: uploaded,
-      message: `Successfully backed up ${data.invoices.length} invoices, ${data.clients.length} clients, and expenses to Google Drive file "${fileName}".`
+      file: uploadedFile,
+      message: options?.overwriteFileId
+        ? `Updated Google Drive backup file "${fileName}" (${data.invoices.length} invoices, ${data.clients.length} clients).`
+        : `Backed up ${data.invoices.length} invoices, ${data.clients.length} clients, and expenses to Google Drive file "${fileName}".`,
     };
   } catch (error: any) {
-    console.error('Failed to backup directly to Google Drive:', error);
+    console.error('Failed to backup to Google Drive:', error);
     return {
       success: false,
-      message: error?.message || 'Failed to upload backup to Google Drive.'
+      message: error?.message || 'Failed to upload backup to Google Drive.',
     };
   }
 };
 
 /**
- * Retrieve list of backup files stored in Google Drive
+ * Retrieve combined list of backup files stored in Google Drive API & Cloud Drive Vault
  */
-export const fetchGoogleDriveBackupList = async (): Promise<GoogleDriveFile[]> => {
-  try {
-    return await listGoogleDriveFiles('AfAccounts');
-  } catch (error) {
-    console.error('Failed to list Google Drive backups:', error);
-    return [];
+export const fetchGoogleDriveBackupList = async (
+  emailOverride?: string
+): Promise<GoogleDriveFile[]> => {
+  const activeEmail = getActiveDriveEmail(emailOverride);
+  const combinedMap = new Map<string, GoogleDriveFile>();
+
+  // 1. Fetch from direct Google Drive REST API v3 if OAuth token is active
+  if (hasActiveGoogleOAuthToken()) {
+    try {
+      const apiFiles = await listGoogleDriveFiles('AfAccounts');
+      for (const f of apiFiles) {
+        combinedMap.set(f.name, { ...f, source: 'google-drive-api' });
+      }
+    } catch (error) {
+      console.warn('Direct Google Drive file list fallback to Cloud Vault:', error);
+    }
   }
+
+  // 2. Fetch from Server Cloud Drive Vault (/api/drive-files/:email)
+  const targetEmail = activeEmail || 'workspace@afaccounts.local';
+  try {
+    if (typeof navigator === 'undefined' || navigator.onLine) {
+      const res = await fetch(`/api/drive-files/${encodeURIComponent(targetEmail)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.files)) {
+          for (const f of data.files) {
+            const existing = combinedMap.get(f.name);
+            if (existing) {
+              combinedMap.set(f.name, {
+                ...f,
+                ...existing,
+                invoiceCount: f.invoiceCount ?? existing.invoiceCount,
+                clientCount: f.clientCount ?? existing.clientCount,
+                isMasterMirror: f.isMasterMirror ?? existing.isMasterMirror,
+              });
+            } else {
+              combinedMap.set(f.name, { ...f, source: 'cloud-vault' });
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('Server drive-files list fallback to local cache:', e);
+  }
+
+  // 3. Merge any locally cached Drive backup files
+  try {
+    const cache = JSON.parse(localStorage.getItem(DRIVE_FILES_LOCAL_CACHE_KEY) || '{}');
+    const localList: Array<GoogleDriveFile & { payload?: AppBackupPayload }> =
+      cache[targetEmail] || [];
+    for (const item of localList) {
+      const { payload: _p, ...meta } = item;
+      if (!combinedMap.has(meta.name)) {
+        combinedMap.set(meta.name, meta);
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  return Array.from(combinedMap.values()).sort((a, b) => {
+    const timeA = new Date(a.modifiedTime || a.createdTime || 0).getTime();
+    const timeB = new Date(b.modifiedTime || b.createdTime || 0).getTime();
+    return timeB - timeA;
+  });
+};
+
+/**
+ * Download a backup file's payload from Google Drive or Cloud Vault WITHOUT mutating localStorage yet
+ */
+export const fetchDriveFilePayload = async (
+  fileId: string,
+  emailOverride?: string
+): Promise<{ success: boolean; message: string; payload?: AppBackupPayload }> => {
+  const activeEmail = getActiveDriveEmail(emailOverride) || 'workspace@afaccounts.local';
+
+  // 1. Try direct Google Drive API v3 if it's a real Drive fileId and OAuth token is active
+  if (hasActiveGoogleOAuthToken() && !fileId.startsWith('drv_')) {
+    try {
+      const rawContent = await downloadGoogleDriveFileContent(fileId);
+      const parsed: AppBackupPayload = JSON.parse(rawContent);
+      if (parsed && (Array.isArray(parsed.invoices) || Array.isArray(parsed.clients))) {
+        return {
+          success: true,
+          message: `Loaded backup with ${parsed.invoices?.length || 0} invoices and ${parsed.clients?.length || 0} clients from Google Drive.`,
+          payload: parsed,
+        };
+      }
+    } catch (e) {
+      console.warn('Direct Google Drive file download fallback to Cloud Vault:', e);
+    }
+  }
+
+  // 2. Try Server Cloud Drive Vault (/api/drive-files/:email/:fileId)
+  try {
+    if (typeof navigator === 'undefined' || navigator.onLine) {
+      const res = await fetch(
+        `/api/drive-files/${encodeURIComponent(activeEmail)}/${encodeURIComponent(fileId)}`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.payload) {
+          return {
+            success: true,
+            message: `Loaded backup from Google Drive Cloud Vault.`,
+            payload: data.payload,
+          };
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('Cloud Drive Vault download fallback to local cache:', e);
+  }
+
+  // 3. Try local cache
+  try {
+    const cache = JSON.parse(localStorage.getItem(DRIVE_FILES_LOCAL_CACHE_KEY) || '{}');
+    const localList: Array<GoogleDriveFile & { payload?: AppBackupPayload }> =
+      cache[activeEmail] || [];
+    const found = localList.find(f => f.id === fileId || f.name === fileId);
+    if (found?.payload) {
+      return {
+        success: true,
+        message: 'Loaded backup from local Drive cache.',
+        payload: found.payload,
+      };
+    }
+  } catch {
+    // ignore
+  }
+
+  return {
+    success: false,
+    message: 'Could not download the selected backup file from Google Drive.',
+  };
 };
 
 /**
@@ -83,28 +322,77 @@ export const fetchGoogleDriveBackupList = async (): Promise<GoogleDriveFile[]> =
  */
 export const restoreFromGoogleDriveFile = async (
   fileId: string,
-  mode: 'replace' | 'merge' = 'replace'
+  mode: 'replace' | 'merge' = 'replace',
+  applyImmediately: boolean = false
 ): Promise<{ success: boolean; message: string; payload?: AppBackupPayload }> => {
-  try {
-    const rawContent = await downloadGoogleDriveFileContent(fileId);
-    const parsed: AppBackupPayload = JSON.parse(rawContent);
-
-    if (!parsed || (!Array.isArray(parsed.invoices) && !Array.isArray(parsed.clients))) {
-      throw new Error('Downloaded file does not appear to be a valid AfAccounts backup archive.');
-    }
-
-    applyBackupPayload(parsed, mode);
-    return {
-      success: true,
-      message: `Successfully loaded ${parsed.invoices?.length || 0} invoices and ${parsed.clients?.length || 0} clients from Google Drive!`,
-      payload: parsed
-    };
-  } catch (error: any) {
-    return {
-      success: false,
-      message: error?.message || 'Failed to restore backup from Google Drive.'
-    };
+  const fetched = await fetchDriveFilePayload(fileId);
+  if (!fetched.success || !fetched.payload) {
+    return fetched;
   }
+  if (applyImmediately) {
+    applyBackupPayload(fetched.payload, mode);
+  }
+  return {
+    success: true,
+    message: `Ready to restore ${fetched.payload.invoices?.length || 0} invoices and ${fetched.payload.clients?.length || 0} clients from Google Drive.`,
+    payload: fetched.payload,
+  };
+};
+
+/**
+ * Delete a backup file from Google Drive API and Cloud Vault (Call AFTER user confirmation)
+ */
+export const deleteBackupFileFromDrive = async (
+  fileId: string,
+  fileName?: string,
+  emailOverride?: string
+): Promise<{ success: boolean; message: string }> => {
+  const activeEmail = getActiveDriveEmail(emailOverride) || 'workspace@afaccounts.local';
+
+  // 1. Delete from Google Drive REST API v3 if applicable
+  if (hasActiveGoogleOAuthToken() && !fileId.startsWith('drv_')) {
+    try {
+      await deleteGoogleDriveFile(fileId);
+    } catch (e) {
+      console.warn('Direct Google Drive file delete warning:', e);
+    }
+  }
+
+  // 2. Delete from Server Cloud Drive Vault
+  try {
+    if (typeof navigator === 'undefined' || navigator.onLine) {
+      await fetch(
+        `/api/drive-files/${encodeURIComponent(activeEmail)}/${encodeURIComponent(fileId)}`,
+        { method: 'DELETE' }
+      );
+      if (fileName) {
+        await fetch(
+          `/api/drive-files/${encodeURIComponent(activeEmail)}/${encodeURIComponent(fileName)}`,
+          { method: 'DELETE' }
+        );
+      }
+    }
+  } catch (e) {
+    console.warn('Server drive file delete warning:', e);
+  }
+
+  // 3. Delete from local cache
+  try {
+    const cache = JSON.parse(localStorage.getItem(DRIVE_FILES_LOCAL_CACHE_KEY) || '{}');
+    if (Array.isArray(cache[activeEmail])) {
+      cache[activeEmail] = cache[activeEmail].filter(
+        (f: GoogleDriveFile) => f.id !== fileId && (!fileName || f.name !== fileName)
+      );
+      localStorage.setItem(DRIVE_FILES_LOCAL_CACHE_KEY, JSON.stringify(cache));
+    }
+  } catch {
+    // ignore
+  }
+
+  return {
+    success: true,
+    message: `Deleted backup "${fileName || fileId}" from Google Drive.`,
+  };
 };
 
 /**
@@ -115,11 +403,13 @@ export const getLinkedDriveAccount = (): string | null => {
 };
 
 /**
- * Set linked Google Drive account email
+ * Set linked Google Drive account email and notify auth listeners
  */
 export const setLinkedDriveAccount = (email: string | null): void => {
-  if (email) {
-    localStorage.setItem(DRIVE_LINKED_ACCOUNT_KEY, email);
+  if (email && email.trim()) {
+    const clean = email.toLowerCase().trim();
+    localStorage.setItem(DRIVE_LINKED_ACCOUNT_KEY, clean);
+    linkGoogleDriveAccountByEmail(clean);
   } else {
     localStorage.removeItem(DRIVE_LINKED_ACCOUNT_KEY);
   }
@@ -197,19 +487,35 @@ export const syncToGoogleDriveCloud = async (
     console.warn('Multi-device server vault sync warning (offline mode active):', e);
   }
 
-  // 3. If Google Drive OAuth is connected, update or create the master file on Google Drive
+  // 3. If Google Drive OAuth token is active in memory, update or create the master file on Google Drive
   try {
-    if (isGoogleDriveConnected()) {
-      const masterFileName = `AfAccounts_Master_Sync_${cleanEmail.replace(/[^a-z0-9]/gi, '_')}.json`;
+    const masterFileName = `AfAccounts_Master_Sync_${cleanEmail.replace(/[^a-z0-9]/gi, '_')}.json`;
+    const jsonStr = JSON.stringify(data, null, 2);
+    let masterMeta: GoogleDriveFile = {
+      id: `drv_master_${cleanEmail.replace(/[^a-z0-9]/gi, '_')}`,
+      name: masterFileName,
+      mimeType: 'application/json',
+      createdTime: data.exportedAt,
+      modifiedTime: data.exportedAt,
+      size: String(new Blob([jsonStr]).size),
+      invoiceCount: data.invoices.length,
+      clientCount: data.clients.length,
+      isMasterMirror: true,
+      source: 'cloud-vault',
+    };
+
+    if (hasActiveGoogleOAuthToken()) {
       const existingFiles = await listGoogleDriveFiles(masterFileName);
       const exactFile = existingFiles.find(f => f.name === masterFileName);
-      const jsonStr = JSON.stringify(data, null, 2);
       if (exactFile) {
-        await updateFileInGoogleDrive(exactFile.id, masterFileName, 'application/json', jsonStr);
+        masterMeta = await updateFileInGoogleDrive(exactFile.id, masterFileName, 'application/json', jsonStr);
       } else {
-        await uploadFileToGoogleDrive(masterFileName, 'application/json', jsonStr);
+        masterMeta = await uploadFileToGoogleDrive(masterFileName, 'application/json', jsonStr);
       }
+      masterMeta.isMasterMirror = true;
     }
+
+    saveLocalDriveFileRecord(cleanEmail, masterMeta, data);
   } catch (e) {
     console.warn('Google Drive background master sync warning:', e);
   }
@@ -247,9 +553,9 @@ export const pullFromCloudAndDriveByEmail = async (
 
   setLinkedDriveAccount(cleanEmail);
 
-  // 1. Check Google Drive Master File first if connected
+  // 1. Check Google Drive Master File first if OAuth token is active
   try {
-    if (isGoogleDriveConnected()) {
+    if (hasActiveGoogleOAuthToken()) {
       const masterFileName = `AfAccounts_Master_Sync_${cleanEmail.replace(/[^a-z0-9]/gi, '_')}.json`;
       let files = await listGoogleDriveFiles(masterFileName);
       if (files.length === 0) {

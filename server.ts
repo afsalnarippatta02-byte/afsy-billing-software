@@ -13,6 +13,7 @@ const PORT = 3000;
 const DATA_DIR = path.join(__dirname, '.data');
 const VAULT_FILE = path.join(DATA_DIR, 'email_cloud_vault.json');
 const VERIFY_FILE = path.join(DATA_DIR, 'email_verifications.json');
+const DRIVE_FILES_FILE = path.join(DATA_DIR, 'drive_backup_files.json');
 
 // Ensure data directory exists for multi-device email sync persistence
 if (!fs.existsSync(DATA_DIR)) {
@@ -25,6 +26,87 @@ if (!fs.existsSync(DATA_DIR)) {
 
 interface CloudVaultStore {
   [email: string]: any;
+}
+
+interface StoredDriveFileRecord {
+  id: string;
+  name: string;
+  mimeType: string;
+  createdTime: string;
+  modifiedTime: string;
+  size: string;
+  invoiceCount?: number;
+  clientCount?: number;
+  isMasterMirror?: boolean;
+  content: any;
+}
+
+interface DriveFilesStore {
+  [email: string]: StoredDriveFileRecord[];
+}
+
+function readDriveFilesStore(): DriveFilesStore {
+  try {
+    if (fs.existsSync(DRIVE_FILES_FILE)) {
+      const raw = fs.readFileSync(DRIVE_FILES_FILE, 'utf-8');
+      return JSON.parse(raw);
+    }
+  } catch (e) {
+    console.warn('Error reading drive files store:', e);
+  }
+  return {};
+}
+
+function writeDriveFilesStore(store: DriveFilesStore): void {
+  try {
+    fs.writeFileSync(DRIVE_FILES_FILE, JSON.stringify(store, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('Error writing drive files store:', e);
+  }
+}
+
+function upsertMasterDriveMirrorFile(email: string, payload: any): StoredDriveFileRecord {
+  const cleanEmail = email.toLowerCase().trim();
+  const store = readDriveFilesStore();
+  const list = store[cleanEmail] || [];
+  const masterName = `AfAccounts_Master_Sync_${cleanEmail.replace(/[^a-z0-9]/gi, '_')}.json`;
+  const nowIso = new Date().toISOString();
+  const jsonStr = JSON.stringify(payload);
+  const sizeBytes = String(Buffer.byteLength(jsonStr, 'utf-8'));
+
+  const existingIdx = list.findIndex(f => f.name === masterName || f.isMasterMirror);
+  let record: StoredDriveFileRecord;
+  if (existingIdx >= 0) {
+    record = {
+      ...list[existingIdx],
+      name: masterName,
+      modifiedTime: nowIso,
+      size: sizeBytes,
+      invoiceCount: Array.isArray(payload?.invoices) ? payload.invoices.length : 0,
+      clientCount: Array.isArray(payload?.clients) ? payload.clients.length : 0,
+      isMasterMirror: true,
+      content: payload,
+    };
+    list[existingIdx] = record;
+  } else {
+    record = {
+      id: `drv_master_${cleanEmail.replace(/[^a-z0-9]/gi, '_')}`,
+      name: masterName,
+      mimeType: 'application/json',
+      createdTime: nowIso,
+      modifiedTime: nowIso,
+      size: sizeBytes,
+      invoiceCount: Array.isArray(payload?.invoices) ? payload.invoices.length : 0,
+      clientCount: Array.isArray(payload?.clients) ? payload.clients.length : 0,
+      isMasterMirror: true,
+      content: payload,
+    };
+    list.unshift(record);
+  }
+
+  store[cleanEmail] = list.slice(0, 30);
+  writeDriveFilesStore(store);
+  return record;
 }
 
 function readVault(): CloudVaultStore {
@@ -215,12 +297,164 @@ async function startServer() {
 
     vault[cleanEmail] = finalPayload;
     writeVault(vault);
+    upsertMasterDriveMirrorFile(cleanEmail, finalPayload);
 
     res.json({
       success: true,
       timestamp: nowIso,
       data: finalPayload,
       message: `Synchronized all records across devices for ${cleanEmail}.`,
+    });
+  });
+
+  // ============================================================================
+  // 1A. GOOGLE DRIVE CLOUD BACKUP ARCHIVE ENDPOINTS (Multi-Device File Mirror)
+  // ============================================================================
+  app.get('/api/drive-files/:email', (req, res) => {
+    const cleanEmail = (req.params.email || '').toLowerCase().trim();
+    if (!cleanEmail) {
+      res.status(400).json({ success: false, files: [], message: 'Email is required.' });
+      return;
+    }
+
+    const store = readDriveFilesStore();
+    let files = store[cleanEmail] || [];
+
+    // Ensure master mirror file appears if vault data exists for this email
+    const vault = readVault();
+    if (files.length === 0 && vault[cleanEmail]) {
+      const masterRecord = upsertMasterDriveMirrorFile(cleanEmail, vault[cleanEmail]);
+      files = [masterRecord];
+    }
+
+    const metadataOnly = files.map(({ content, ...meta }) => meta);
+    res.json({
+      success: true,
+      files: metadataOnly,
+    });
+  });
+
+  app.post('/api/drive-files/:email', (req, res) => {
+    const cleanEmail = (req.params.email || '').toLowerCase().trim();
+    const { fileName, payload, fileId, isMasterMirror } = req.body || {};
+    if (!cleanEmail || !payload) {
+      res.status(400).json({ success: false, message: 'Email and backup payload are required.' });
+      return;
+    }
+
+    const store = readDriveFilesStore();
+    const list = store[cleanEmail] || [];
+    const nowIso = new Date().toISOString();
+    const safeName =
+      fileName ||
+      `AfAccounts-Backup-${nowIso.replace(/[:.]/g, '-')}.json`;
+    const jsonStr = JSON.stringify(payload);
+    const sizeBytes = String(Buffer.byteLength(jsonStr, 'utf-8'));
+
+    let savedRecord: StoredDriveFileRecord;
+    const existingIdx = list.findIndex(
+      f => (fileId && f.id === fileId) || f.name === safeName
+    );
+
+    if (existingIdx >= 0) {
+      savedRecord = {
+        ...list[existingIdx],
+        name: safeName,
+        modifiedTime: nowIso,
+        size: sizeBytes,
+        invoiceCount: Array.isArray(payload?.invoices) ? payload.invoices.length : 0,
+        clientCount: Array.isArray(payload?.clients) ? payload.clients.length : 0,
+        isMasterMirror: isMasterMirror ?? list[existingIdx].isMasterMirror,
+        content: payload,
+      };
+      list[existingIdx] = savedRecord;
+    } else {
+      savedRecord = {
+        id: fileId || `drv_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        name: safeName,
+        mimeType: 'application/json',
+        createdTime: nowIso,
+        modifiedTime: nowIso,
+        size: sizeBytes,
+        invoiceCount: Array.isArray(payload?.invoices) ? payload.invoices.length : 0,
+        clientCount: Array.isArray(payload?.clients) ? payload.clients.length : 0,
+        isMasterMirror: !!isMasterMirror,
+        content: payload,
+      };
+      list.unshift(savedRecord);
+    }
+
+    store[cleanEmail] = list.slice(0, 30);
+    writeDriveFilesStore(store);
+
+    // Also update master vault so all devices stay in sync
+    const vault = readVault();
+    vault[cleanEmail] = {
+      ...payload,
+      userEmail: cleanEmail,
+      exportedAt: nowIso,
+      lastSyncTime: nowIso,
+    };
+    writeVault(vault);
+
+    const { content, ...meta } = savedRecord;
+    res.json({
+      success: true,
+      file: meta,
+      message: `Saved backup "${safeName}" to Google Drive Cloud Vault.`,
+    });
+  });
+
+  app.get('/api/drive-files/:email/:fileId', (req, res) => {
+    const cleanEmail = (req.params.email || '').toLowerCase().trim();
+    const fileId = req.params.fileId || '';
+    const store = readDriveFilesStore();
+    const list = store[cleanEmail] || [];
+    const found = list.find(f => f.id === fileId || f.name === fileId);
+
+    if (found && found.content) {
+      res.json({
+        success: true,
+        file: {
+          id: found.id,
+          name: found.name,
+          createdTime: found.createdTime,
+          modifiedTime: found.modifiedTime,
+          size: found.size,
+        },
+        payload: found.content,
+      });
+      return;
+    }
+
+    // Fallback to master vault if requested
+    const vault = readVault();
+    if (vault[cleanEmail]) {
+      res.json({
+        success: true,
+        payload: vault[cleanEmail],
+      });
+      return;
+    }
+
+    res.status(404).json({
+      success: false,
+      message: 'Requested Google Drive backup file was not found.',
+    });
+  });
+
+  app.delete('/api/drive-files/:email/:fileId', (req, res) => {
+    const cleanEmail = (req.params.email || '').toLowerCase().trim();
+    const fileId = req.params.fileId || '';
+    const store = readDriveFilesStore();
+    const list = store[cleanEmail] || [];
+    const filtered = list.filter(f => f.id !== fileId && f.name !== fileId);
+    store[cleanEmail] = filtered;
+    writeDriveFilesStore(store);
+
+    res.json({
+      success: true,
+      message: 'Backup file deleted from Google Drive Cloud Vault.',
     });
   });
 

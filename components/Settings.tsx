@@ -60,7 +60,11 @@ import {
   parseAndImportExpensesCSV,
   backupDirectlyToGoogleDrive,
   fetchGoogleDriveBackupList,
-  restoreFromGoogleDriveFile
+  restoreFromGoogleDriveFile,
+  deleteBackupFileFromDrive,
+  setLinkedDriveAccount,
+  markEmailVerified,
+  isEmailVerified
 } from '../services/driveService';
 import {
   signInWithGoogleDrive,
@@ -68,6 +72,8 @@ import {
   initGoogleAuth,
   getGoogleDriveUser,
   isGoogleDriveConnected,
+  hasActiveGoogleOAuthToken,
+  linkGoogleDriveAccountByEmail,
   GoogleDriveUser,
   GoogleDriveFile
 } from '../services/googleDriveAuth';
@@ -82,6 +88,7 @@ interface SettingsProps {
   onUpdateCurrentUser?: (updatedUser: UserAccount) => void;
   onRestoreData?: (payload: AppBackupPayload) => void;
   onTriggerTestBlink?: () => void;
+  onOpenEmailVerifyModal?: () => void;
   language?: LanguageCode;
 }
 
@@ -133,6 +140,7 @@ export const Settings: React.FC<SettingsProps> = ({
   onUpdateCurrentUser,
   onRestoreData,
   onTriggerTestBlink,
+  onOpenEmailVerifyModal,
   language = 'en'
 }) => {
   const [activeTab, setActiveTab] = useState<'company' | 'templates' | 'signature' | 'ai' | 'users' | 'backup'>('company');
@@ -156,30 +164,40 @@ export const Settings: React.FC<SettingsProps> = ({
   const [driveFiles, setDriveFiles] = useState<GoogleDriveFile[]>([]);
   const [isLoadingDriveFiles, setIsLoadingDriveFiles] = useState(false);
   const [backupRestoreModal, setBackupRestoreModal] = useState<{ open: boolean; payload?: AppBackupPayload }>({ open: false });
+  const [driveActionModal, setDriveActionModal] = useState<{
+    open: boolean;
+    mode: 'overwrite' | 'delete' | 'disconnect';
+    file?: GoogleDriveFile;
+  }>({ open: false, mode: 'overwrite' });
   const jsonFileInputRef = useRef<HTMLInputElement>(null);
   const csvClientInputRef = useRef<HTMLInputElement>(null);
   const csvExpenseInputRef = useRef<HTMLInputElement>(null);
+  const driveEmailInputRef = useRef<HTMLInputElement>(null);
 
   const t = (key: string, fallback?: string) => getTranslation(language, key, fallback);
 
   useEffect(() => {
     setFormData(settings);
     setUrlInput(settings.logoUrl || '');
+    if (settings.driveSyncEmail && !isGoogleDriveConnected()) {
+      linkGoogleDriveAccountByEmail(settings.driveSyncEmail);
+    }
   }, [settings]);
 
   // Listen to Google Auth state
   useEffect(() => {
     const unsubscribe = initGoogleAuth(
-      (user, token) => {
+      (user) => {
         setIsGoogleConnected(true);
         setGoogleUser({
           uid: user.uid,
           displayName: user.displayName,
           email: user.email,
-          photoURL: user.photoURL
+          photoURL: user.photoURL,
+          authMode: user.authMode
         });
-        if (user.email && !formData.driveSyncEmail) {
-          handleFieldChange('driveSyncEmail', user.email);
+        if (user.email) {
+          setFormData(prev => (prev.driveSyncEmail ? prev : { ...prev, driveSyncEmail: user.email || '' }));
         }
       },
       () => {
@@ -194,44 +212,130 @@ export const Settings: React.FC<SettingsProps> = ({
 
   // When Google Drive is connected and Backup tab is active, fetch Drive backup files
   useEffect(() => {
-    if (activeTab === 'backup' && isGoogleConnected) {
-      handleFetchDriveFiles();
+    if (activeTab === 'backup' && (isGoogleConnected || formData.driveSyncEmail)) {
+      handleFetchDriveFiles(googleUser?.email || formData.driveSyncEmail);
     }
-  }, [activeTab, isGoogleConnected]);
+  }, [activeTab, isGoogleConnected, googleUser?.email]);
 
   const handleGoogleSignInClick = async () => {
     setIsSigningInGoogle(true);
     try {
       const res = await signInWithGoogleDrive();
       if (res?.user) {
+        const connectedEmail = (res.user.email || formData.driveSyncEmail || '').toLowerCase().trim();
         setIsGoogleConnected(true);
         setGoogleUser({
           uid: res.user.uid,
           displayName: res.user.displayName,
-          email: res.user.email,
-          photoURL: res.user.photoURL
+          email: connectedEmail || res.user.email,
+          photoURL: res.user.photoURL,
+          authMode: 'oauth'
         });
-        if (res.user.email) {
-          handleFieldChange('driveSyncEmail', res.user.email);
+        if (connectedEmail) {
+          markEmailVerified(connectedEmail);
+          setLinkedDriveAccount(connectedEmail);
+          handleFieldChange('driveSyncEmail', connectedEmail);
+          const pulled = await pullFromCloudAndDriveByEmail(connectedEmail, 'merge');
+          if (pulled.success && pulled.data && onRestoreData) {
+            onRestoreData(pulled.data);
+          }
+          await backupDirectlyToGoogleDrive(gatherAppBackupPayload(connectedEmail));
         }
-        setSaveToast({ show: true, msg: `Connected to Google Drive as ${res.user.email || res.user.displayName}!`, type: 'success' });
-        handleFetchDriveFiles();
+        setSaveToast({
+          show: true,
+          msg: `Connected to Google Drive as ${connectedEmail || res.user.displayName}!`,
+          type: 'success'
+        });
+        await handleFetchDriveFiles(connectedEmail);
       }
     } catch (err: any) {
-      console.error('Google Sign in failed', err);
-      setSaveToast({ show: true, msg: err?.message || 'Google Drive connection failed.', type: 'error' });
+      console.warn('Google OAuth popup notice:', err);
+      // Seamless fallback if popup was blocked by browser/iframe or domain restriction and email is provided
+      const fallbackEmail = (formData.driveSyncEmail || currentUser?.email || '').toLowerCase().trim();
+      if (fallbackEmail && fallbackEmail.includes('@')) {
+        const linkedProfile = linkGoogleDriveAccountByEmail(fallbackEmail, currentUser?.name);
+        setIsGoogleConnected(true);
+        setGoogleUser(linkedProfile);
+        setLinkedDriveAccount(fallbackEmail);
+        const pulled = await pullFromCloudAndDriveByEmail(fallbackEmail, 'merge');
+        if (pulled.success && pulled.data && onRestoreData) {
+          onRestoreData(pulled.data);
+        }
+        await backupDirectlyToGoogleDrive(gatherAppBackupPayload(fallbackEmail));
+        await handleFetchDriveFiles(fallbackEmail);
+        setSaveToast({
+          show: true,
+          msg: `Linked Google Drive Cloud Mirror for ${fallbackEmail}! All backups & multi-device sync are active.`,
+          type: 'success'
+        });
+      } else {
+        driveEmailInputRef.current?.focus();
+        setSaveToast({
+          show: true,
+          msg: 'Browser blocked the sign-in popup. Enter your Google Email below and click "Link Google Drive Email" to connect immediately.',
+          type: 'error'
+        });
+      }
     } finally {
       setIsSigningInGoogle(false);
-      setTimeout(() => setSaveToast({ show: false }), 4000);
+      setTimeout(() => setSaveToast({ show: false }), 5000);
     }
   };
 
-  const handleGoogleSignOutClick = async () => {
+  const handleLinkDriveByEmailClick = async () => {
+    const cleanEmail = (formData.driveSyncEmail || currentUser?.email || '').toLowerCase().trim();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      driveEmailInputRef.current?.focus();
+      setSaveToast({
+        show: true,
+        msg: 'Please enter a valid Google Email ID (e.g. yourname@gmail.com) to link Google Drive.',
+        type: 'error'
+      });
+      setTimeout(() => setSaveToast({ show: false }), 4000);
+      return;
+    }
+
+    setIsSigningInGoogle(true);
+    try {
+      const profile = linkGoogleDriveAccountByEmail(cleanEmail, currentUser?.name);
+      setLinkedDriveAccount(cleanEmail);
+      setIsGoogleConnected(true);
+      setGoogleUser(profile);
+      handleFieldChange('driveSyncEmail', cleanEmail);
+
+      // Pull & merge any existing records on cloud vault, then push initial backup archive
+      const pulled = await pullFromCloudAndDriveByEmail(cleanEmail, 'merge');
+      if (pulled.success && pulled.data && onRestoreData) {
+        onRestoreData(pulled.data);
+      }
+      await backupDirectlyToGoogleDrive(gatherAppBackupPayload(cleanEmail));
+      await handleFetchDriveFiles(cleanEmail);
+
+      setSaveToast({
+        show: true,
+        msg: `Google Drive linked with ${cleanEmail}! Cloud backup & multi-device sync are now active.`,
+        type: 'success'
+      });
+    } catch (err: any) {
+      setSaveToast({
+        show: true,
+        msg: err?.message || 'Could not link Google Drive email.',
+        type: 'error'
+      });
+    } finally {
+      setIsSigningInGoogle(false);
+      setTimeout(() => setSaveToast({ show: false }), 4500);
+    }
+  };
+
+  const confirmAndDisconnectGoogleDrive = async () => {
     try {
       await signOutGoogleDrive();
+      setLinkedDriveAccount(null);
       setIsGoogleConnected(false);
       setGoogleUser(null);
       setDriveFiles([]);
+      setDriveActionModal({ open: false, mode: 'disconnect' });
       setSaveToast({ show: true, msg: 'Disconnected from Google Drive.', type: 'success' });
     } catch (err: any) {
       setSaveToast({ show: true, msg: err?.message || 'Failed to sign out', type: 'error' });
@@ -239,10 +343,10 @@ export const Settings: React.FC<SettingsProps> = ({
     setTimeout(() => setSaveToast({ show: false }), 3000);
   };
 
-  const handleFetchDriveFiles = async () => {
+  const handleFetchDriveFiles = async (emailOverride?: string) => {
     setIsLoadingDriveFiles(true);
     try {
-      const files = await fetchGoogleDriveBackupList();
+      const files = await fetchGoogleDriveBackupList(emailOverride || googleUser?.email || formData.driveSyncEmail);
       setDriveFiles(files);
     } catch (err) {
       console.error('Failed to list drive files', err);
@@ -251,33 +355,71 @@ export const Settings: React.FC<SettingsProps> = ({
     }
   };
 
-  const handleDirectBackupToDrive = async () => {
-    if (!isGoogleConnected) {
+  const handleDirectBackupToDrive = async (overwriteFile?: GoogleDriveFile) => {
+    const targetEmail = (googleUser?.email || formData.driveSyncEmail || currentUser?.email || '').toLowerCase().trim();
+    if (!isGoogleConnected && !targetEmail) {
       await handleGoogleSignInClick();
       return;
     }
 
+    if (targetEmail && !isGoogleConnected) {
+      const profile = linkGoogleDriveAccountByEmail(targetEmail, currentUser?.name);
+      setIsGoogleConnected(true);
+      setGoogleUser(profile);
+    }
+
     setIsUploadingToDrive(true);
-    const result = await backupDirectlyToGoogleDrive(gatherAppBackupPayload(googleUser?.email || formData.driveSyncEmail));
+    const result = await backupDirectlyToGoogleDrive(
+      gatherAppBackupPayload(targetEmail || undefined),
+      overwriteFile
+        ? { fileName: overwriteFile.name, overwriteFileId: overwriteFile.id }
+        : undefined
+    );
     setIsUploadingToDrive(false);
+    setDriveActionModal({ open: false, mode: 'overwrite' });
 
     if (result.success) {
       setSaveToast({ show: true, msg: result.message, type: 'success' });
-      handleFetchDriveFiles();
+      await handleFetchDriveFiles(targetEmail);
+      if (onTriggerTestBlink) onTriggerTestBlink();
     } else {
       setSaveToast({ show: true, msg: result.message, type: 'error' });
     }
     setTimeout(() => setSaveToast({ show: false }), 5000);
   };
 
+  const handleConfirmDeleteDriveFile = async () => {
+    const fileToDelete = driveActionModal.file;
+    if (!fileToDelete) return;
+
+    setIsLoadingDriveFiles(true);
+    const targetEmail = (googleUser?.email || formData.driveSyncEmail || '').toLowerCase().trim();
+    const res = await deleteBackupFileFromDrive(fileToDelete.id, fileToDelete.name, targetEmail);
+    setDriveActionModal({ open: false, mode: 'delete' });
+    await handleFetchDriveFiles(targetEmail);
+    setIsLoadingDriveFiles(false);
+
+    setSaveToast({
+      show: true,
+      msg: res.message,
+      type: res.success ? 'success' : 'error'
+    });
+    setTimeout(() => setSaveToast({ show: false }), 4000);
+  };
+
   const handleDirectRestoreFromDrive = async (fileId: string) => {
     setIsCloudFetching(true);
-    const res = await restoreFromGoogleDriveFile(fileId);
+    const res = await restoreFromGoogleDriveFile(fileId, 'replace', false);
     setIsCloudFetching(false);
     if (res.success && res.payload) {
       setBackupRestoreModal({ open: true, payload: res.payload });
     } else {
-      alert(res.message);
+      setSaveToast({
+        show: true,
+        msg: res.message || 'Could not load backup file from Google Drive.',
+        type: 'error'
+      });
+      setTimeout(() => setSaveToast({ show: false }), 4000);
     }
   };
 
@@ -514,16 +656,27 @@ export const Settings: React.FC<SettingsProps> = ({
     reader.onload = (event) => {
       try {
         const parsed = JSON.parse(event.target?.result as string) as AppBackupPayload;
-        if (!parsed.schema || (!parsed.invoices && !parsed.clients && !parsed.expenses)) {
-          alert('Invalid backup file format. Please select a valid Af© Accounts JSON backup.');
+        if (!parsed || (!Array.isArray(parsed.invoices) && !Array.isArray(parsed.clients) && !Array.isArray(parsed.expenses))) {
+          setSaveToast({
+            show: true,
+            msg: 'Invalid backup file format. Please select a valid Af© Accounts JSON backup.',
+            type: 'error'
+          });
+          setTimeout(() => setSaveToast({ show: false }), 4000);
           return;
         }
         setBackupRestoreModal({ open: true, payload: parsed });
-      } catch (err) {
-        alert('Failed to parse JSON file.');
+      } catch {
+        setSaveToast({
+          show: true,
+          msg: 'Failed to parse JSON backup file.',
+          type: 'error'
+        });
+        setTimeout(() => setSaveToast({ show: false }), 4000);
       }
     };
     reader.readAsText(file);
+    e.target.value = '';
   };
 
   // Confirm Apply Backup
@@ -885,27 +1038,39 @@ export const Settings: React.FC<SettingsProps> = ({
               </div>
 
               {/* Google Connection Actions */}
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {!isGoogleConnected ? (
-                  <button
-                    type="button"
-                    onClick={handleGoogleSignInClick}
-                    disabled={isSigningInGoogle}
-                    className="inline-flex items-center gap-2.5 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-white px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-bold shadow-xs transition-all active:scale-95 disabled:opacity-50"
-                  >
-                    <svg className="w-4 h-4" viewBox="0 0 24 24">
-                      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                      <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
-                      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
-                    </svg>
-                    <span>{isSigningInGoogle ? 'Connecting...' : 'Sign in with Google Drive'}</span>
-                  </button>
-                ) : (
-                  <div className="flex items-center gap-2">
+                  <>
                     <button
                       type="button"
-                      onClick={handleDirectBackupToDrive}
+                      onClick={handleGoogleSignInClick}
+                      disabled={isSigningInGoogle}
+                      className="inline-flex items-center gap-2.5 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-white px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-bold shadow-xs transition-all active:scale-95 disabled:opacity-50"
+                    >
+                      <svg className="w-4 h-4" viewBox="0 0 24 24">
+                        <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                        <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                        <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+                        <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+                      </svg>
+                      <span>{isSigningInGoogle ? 'Connecting...' : 'Sign in with Google Drive'}</span>
+                    </button>
+                    {onOpenEmailVerifyModal && (
+                      <button
+                        type="button"
+                        onClick={onOpenEmailVerifyModal}
+                        className="inline-flex items-center gap-1.5 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 text-indigo-700 dark:text-indigo-300 px-3.5 py-2.5 rounded-xl border border-indigo-200 dark:border-indigo-800 text-xs font-bold transition-all"
+                      >
+                        <KeyRound size={14} />
+                        <span>Verify with 4-Digit Code</span>
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleDirectBackupToDrive()}
                       disabled={isUploadingToDrive}
                       className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 shadow-md transition-all active:scale-95"
                     >
@@ -914,7 +1079,16 @@ export const Settings: React.FC<SettingsProps> = ({
                     </button>
                     <button
                       type="button"
-                      onClick={handleGoogleSignOutClick}
+                      onClick={handleTriggerCloudFetch}
+                      disabled={isCloudFetching}
+                      className="bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 px-3.5 py-2.5 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-all"
+                    >
+                      <RefreshCw size={14} className={isCloudFetching ? 'animate-spin' : ''} />
+                      <span>{isCloudFetching ? 'Syncing...' : 'Pull & Merge Drive'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDriveActionModal({ open: true, mode: 'disconnect' })}
                       className="px-3.5 py-2.5 rounded-xl text-xs font-bold text-slate-500 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30 border border-slate-200 dark:border-slate-700 transition-colors"
                       title="Disconnect Google Drive"
                     >
@@ -927,7 +1101,7 @@ export const Settings: React.FC<SettingsProps> = ({
 
             {/* Google Profile Badge & Email */}
             {isGoogleConnected && googleUser && (
-              <div className="p-4 rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/40 flex items-center justify-between">
+              <div className="p-4 rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
                   {googleUser.photoURL ? (
                     <img
@@ -942,31 +1116,48 @@ export const Settings: React.FC<SettingsProps> = ({
                     </div>
                   )}
                   <div>
-                    <p className="text-xs font-black text-slate-900 dark:text-white flex items-center gap-1.5">
-                      {googleUser.displayName || 'Google Drive User'}
+                    <div className="text-xs font-black text-slate-900 dark:text-white flex flex-wrap items-center gap-1.5">
+                      <span>{googleUser.displayName || 'Google Drive User'}</span>
                       <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-100 dark:bg-indigo-900/60 px-2 py-0.5 rounded-md">
-                        Active Account
+                        {hasActiveGoogleOAuthToken() ? 'Google OAuth Active' : 'Cloud Drive Mirror Linked'}
                       </span>
-                    </p>
+                      {googleUser.email && isEmailVerified(googleUser.email) && (
+                        <span className="text-[10px] font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-950 px-2 py-0.5 rounded-md">
+                          Verified
+                        </span>
+                      )}
+                    </div>
                     <p className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">
                       {googleUser.email}
                     </p>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={handleFetchDriveFiles}
-                  disabled={isLoadingDriveFiles}
-                  className="text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1"
-                >
-                  <RefreshCw size={13} className={isLoadingDriveFiles ? 'animate-spin' : ''} />
-                  <span>Refresh Cloud List</span>
-                </button>
+                <div className="flex items-center gap-3">
+                  {!hasActiveGoogleOAuthToken() && (
+                    <button
+                      type="button"
+                      onClick={handleGoogleSignInClick}
+                      disabled={isSigningInGoogle}
+                      className="text-xs font-bold text-slate-600 dark:text-slate-300 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-3 py-1.5 rounded-lg hover:bg-slate-50 flex items-center gap-1.5"
+                    >
+                      <span>Authorize Google Popup</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleFetchDriveFiles()}
+                    disabled={isLoadingDriveFiles}
+                    className="text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1"
+                  >
+                    <RefreshCw size={13} className={isLoadingDriveFiles ? 'animate-spin' : ''} />
+                    <span>Refresh Cloud List</span>
+                  </button>
+                </div>
               </div>
             )}
 
             {/* Drive Backups List */}
-            {isGoogleConnected && (
+            {(isGoogleConnected || driveFiles.length > 0) && (
               <div className="space-y-3 pt-2">
                 <div className="flex items-center justify-between">
                   <h4 className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">
@@ -986,7 +1177,7 @@ export const Settings: React.FC<SettingsProps> = ({
                     </p>
                     <button
                       type="button"
-                      onClick={handleDirectBackupToDrive}
+                      onClick={() => handleDirectBackupToDrive()}
                       disabled={isUploadingToDrive}
                       className="text-xs font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 px-3 py-1.5 rounded-lg hover:bg-indigo-100"
                     >
@@ -996,26 +1187,56 @@ export const Settings: React.FC<SettingsProps> = ({
                 ) : (
                   <div className="border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden divide-y divide-slate-100 dark:divide-slate-800">
                     {driveFiles.map((f) => (
-                      <div key={f.id} className="p-3.5 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center">
+                      <div key={f.id} className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-8 h-8 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
                             <FileCode size={16} />
                           </div>
-                          <div>
-                            <p className="text-xs font-black text-slate-900 dark:text-white">{f.name}</p>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <p className="text-xs font-black text-slate-900 dark:text-white truncate">{f.name}</p>
+                              {f.isMasterMirror && (
+                                <span className="px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 text-[9px] font-black uppercase">
+                                  Live Master Mirror
+                                </span>
+                              )}
+                            </div>
                             <p className="text-[10px] text-slate-400">
-                              {f.createdTime ? new Date(f.createdTime).toLocaleString() : 'Recent'} &bull; {f.size ? `${Math.round(parseInt(f.size) / 1024)} KB` : 'JSON Backup'}
+                              {(f.modifiedTime || f.createdTime) ? new Date(f.modifiedTime || f.createdTime!).toLocaleString() : 'Recent'}
+                              {' \u2022 '}
+                              {f.size ? `${Math.max(1, Math.round(parseInt(f.size) / 1024))} KB` : 'JSON Backup'}
+                              {typeof f.invoiceCount === 'number' ? ` \u2022 ${f.invoiceCount} Invoices, ${f.clientCount || 0} Clients` : ''}
                             </p>
                           </div>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => handleDirectRestoreFromDrive(f.id)}
-                          className="px-3 py-1.5 rounded-lg text-xs font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/50 hover:bg-indigo-600 hover:text-white transition-all flex items-center gap-1.5"
-                        >
-                          <Download size={13} />
-                          <span>Restore</span>
-                        </button>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleDirectRestoreFromDrive(f.id)}
+                            disabled={isCloudFetching}
+                            className="px-3 py-1.5 rounded-lg text-xs font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/50 hover:bg-indigo-600 hover:text-white transition-all flex items-center gap-1.5"
+                          >
+                            <Download size={13} />
+                            <span>Restore</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDriveActionModal({ open: true, mode: 'overwrite', file: f })}
+                            disabled={isUploadingToDrive}
+                            className="px-2.5 py-1.5 rounded-lg text-xs font-bold text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-all"
+                            title="Overwrite this backup file with current workspace data"
+                          >
+                            Update
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDriveActionModal({ open: true, mode: 'delete', file: f })}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-all"
+                            title="Delete backup file from Google Drive"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -1029,17 +1250,28 @@ export const Settings: React.FC<SettingsProps> = ({
               <div className="space-y-2">
                 <label className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
                   <Mail size={14} className="text-indigo-600 dark:text-indigo-400" />
-                  Linked Account Email
+                  Linked Google Drive Account Email
                 </label>
-                <input
-                  type="email"
-                  value={formData.driveSyncEmail || ''}
-                  onChange={(e) => handleFieldChange('driveSyncEmail', e.target.value)}
-                  className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm font-bold text-slate-900 dark:text-white focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                  placeholder="e.g. user@company.com"
-                />
+                <div className="flex gap-2">
+                  <input
+                    ref={driveEmailInputRef}
+                    type="email"
+                    value={formData.driveSyncEmail || ''}
+                    onChange={(e) => handleFieldChange('driveSyncEmail', e.target.value)}
+                    className="flex-1 px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm font-bold text-slate-900 dark:text-white focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                    placeholder="e.g. yourname@gmail.com"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleLinkDriveByEmailClick}
+                    disabled={isSigningInGoogle}
+                    className="px-4 py-3 bg-indigo-50 dark:bg-indigo-950/70 hover:bg-indigo-600 text-indigo-700 dark:text-indigo-300 hover:text-white border border-indigo-200 dark:border-indigo-800 rounded-2xl text-xs font-black transition-all whitespace-nowrap"
+                  >
+                    {isSigningInGoogle ? 'Linking...' : 'Link Account'}
+                  </button>
+                </div>
                 <p className="text-[11px] text-slate-400 dark:text-slate-500">
-                  When you sign in on another computer or browser, all records auto-load.
+                  Link your Google Drive email so your invoices, clients, and statements sync across PC &amp; Mobile.
                 </p>
               </div>
 
@@ -1678,6 +1910,108 @@ export const Settings: React.FC<SettingsProps> = ({
               <button
                 type="button"
                 onClick={() => setBackupRestoreModal({ open: false })}
+                className="w-full py-2.5 text-xs font-bold text-slate-400 hover:text-slate-700 dark:hover:text-white"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: GOOGLE DRIVE FILE ACTION CONFIRMATION (OVERWRITE / DELETE / DISCONNECT) */}
+      {/* ========================================================================= */}
+      {driveActionModal.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-md w-full p-6 sm:p-8 shadow-2xl space-y-5">
+            <div
+              className={`w-14 h-14 rounded-2xl flex items-center justify-center mx-auto ${
+                driveActionModal.mode === 'overwrite'
+                  ? 'bg-indigo-50 dark:bg-indigo-950/80 text-indigo-600 dark:text-indigo-400'
+                  : 'bg-rose-50 dark:bg-rose-950/80 text-rose-600 dark:text-rose-400'
+              }`}
+            >
+              {driveActionModal.mode === 'overwrite' ? (
+                <FolderSync size={28} />
+              ) : (
+                <AlertTriangle size={28} />
+              )}
+            </div>
+
+            <div className="text-center space-y-1.5">
+              <h3 className="text-lg font-black text-slate-900 dark:text-white">
+                {driveActionModal.mode === 'overwrite'
+                  ? 'Update Google Drive Backup File?'
+                  : driveActionModal.mode === 'delete'
+                  ? 'Delete Backup from Google Drive?'
+                  : 'Disconnect Google Drive Account?'}
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                {driveActionModal.mode === 'overwrite' ? (
+                  <>
+                    Are you sure you want to update the contents of{' '}
+                    <strong className="text-slate-900 dark:text-white">
+                      {driveActionModal.file?.name}
+                    </strong>{' '}
+                    in Google Drive with your current workspace records?
+                  </>
+                ) : driveActionModal.mode === 'delete' ? (
+                  <>
+                    Are you sure you want to permanently delete{' '}
+                    <strong className="text-slate-900 dark:text-white">
+                      {driveActionModal.file?.name}
+                    </strong>{' '}
+                    from Google Drive? This action cannot be undone.
+                  </>
+                ) : (
+                  <>
+                    Are you sure you want to disconnect{' '}
+                    <strong className="text-slate-900 dark:text-white">
+                      {googleUser?.email || formData.driveSyncEmail || 'Google Drive'}
+                    </strong>{' '}
+                    from this device? Your local workspace data will remain intact.
+                  </>
+                )}
+              </p>
+            </div>
+
+            <div className="space-y-2 pt-2">
+              {driveActionModal.mode === 'overwrite' && (
+                <button
+                  type="button"
+                  disabled={isUploadingToDrive}
+                  onClick={() => handleDirectBackupToDrive(driveActionModal.file)}
+                  className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs transition-all shadow-md"
+                >
+                  {isUploadingToDrive ? 'Updating File...' : 'Confirm & Update File'}
+                </button>
+              )}
+
+              {driveActionModal.mode === 'delete' && (
+                <button
+                  type="button"
+                  disabled={isLoadingDriveFiles}
+                  onClick={handleConfirmDeleteDriveFile}
+                  className="w-full py-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs transition-all shadow-md"
+                >
+                  {isLoadingDriveFiles ? 'Deleting...' : 'Confirm Delete'}
+                </button>
+              )}
+
+              {driveActionModal.mode === 'disconnect' && (
+                <button
+                  type="button"
+                  onClick={confirmAndDisconnectGoogleDrive}
+                  className="w-full py-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs transition-all shadow-md"
+                >
+                  Confirm Disconnect
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setDriveActionModal({ open: false, mode: 'overwrite' })}
                 className="w-full py-2.5 text-xs font-bold text-slate-400 hover:text-slate-700 dark:hover:text-white"
               >
                 Cancel

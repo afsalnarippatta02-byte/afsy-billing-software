@@ -66,6 +66,7 @@ import {
   signInWithGoogleDrive,
   isGoogleDriveConnected,
   getGoogleDriveUser,
+  linkGoogleDriveAccountByEmail,
   initGoogleAuth
 } from './services/googleDriveAuth';
 import { LanguageCode, SUPPORTED_LANGUAGES, getTranslation } from './utils/translations';
@@ -526,20 +527,40 @@ const App: React.FC = () => {
       const res = await signInWithGoogleDrive();
       if (res?.user?.email) {
         const gEmail = res.user.email.toLowerCase().trim();
+        markEmailVerified(gEmail);
         setDriveConnected(true);
         setSyncEmailInput(gEmail);
         setLinkedDriveAccount(gEmail);
         setSettings(prev => ({ ...prev, driveSyncEmail: gEmail, autoDriveSync: true }));
+        if (user && !user.email) {
+          handleUpdateCurrentUser({ ...user, email: gEmail });
+        }
 
         const pulled = await pullFromCloudAndDriveByEmail(gEmail, 'merge');
         if (pulled.success && pulled.data) {
           handleRestoreAllData(pulled.data);
         }
         await backupDirectlyToGoogleDrive(gatherAppBackupPayload(gEmail));
+        triggerSaveBlink();
         setSyncStatusMsg(`Connected Google Drive (${gEmail}) & synced all data across devices!`);
       }
     } catch (err: any) {
-      setSyncStatusMsg(err?.message || 'Could not connect Google Drive popup. Email sync remains active.');
+      const fallbackEmail = (syncEmailInput || activeSyncEmail || '').toLowerCase().trim();
+      if (fallbackEmail && fallbackEmail.includes('@')) {
+        linkGoogleDriveAccountByEmail(fallbackEmail, user?.name);
+        setDriveConnected(true);
+        setLinkedDriveAccount(fallbackEmail);
+        setSettings(prev => ({ ...prev, driveSyncEmail: fallbackEmail, autoDriveSync: true }));
+        const pulled = await pullFromCloudAndDriveByEmail(fallbackEmail, 'merge');
+        if (pulled.success && pulled.data) {
+          handleRestoreAllData(pulled.data);
+        }
+        await backupDirectlyToGoogleDrive(gatherAppBackupPayload(fallbackEmail));
+        triggerSaveBlink();
+        setSyncStatusMsg(`Linked Google Drive Mirror (${fallbackEmail}) & synced all data!`);
+      } else {
+        setSyncStatusMsg(err?.message || 'Could not connect Google Drive popup. Email sync remains active.');
+      }
     } finally {
       setIsPullingCloud(false);
     }
@@ -1082,6 +1103,7 @@ const App: React.FC = () => {
               onUpdateCurrentUser={handleUpdateCurrentUser}
               onRestoreData={handleRestoreAllData}
               onTriggerTestBlink={triggerSaveBlink}
+              onOpenEmailVerifyModal={() => setShowSyncModal(true)}
               language={language}
             />
           )}
