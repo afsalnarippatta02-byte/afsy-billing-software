@@ -65,7 +65,21 @@ export interface StatementPdfExportParams {
   categoryWiseRows: StatementCategoryRowPdf[];
   orientation?: 'portrait' | 'landscape';
   filename?: string;
+  accentColor?: string;
+  customTitle?: string;
 }
+
+const hexToRgbTuple = (hex?: string, fallback: [number, number, number] = [15, 23, 42]): [number, number, number] => {
+  if (!hex) return fallback;
+  const clean = hex.replace('#', '').trim();
+  if (clean.length === 6) {
+    const r = parseInt(clean.substring(0, 2), 16);
+    const g = parseInt(clean.substring(2, 4), 16);
+    const b = parseInt(clean.substring(4, 6), 16);
+    if (!isNaN(r) && !isNaN(g) && !isNaN(b)) return [r, g, b];
+  }
+  return fallback;
+};
 
 /**
  * Helper to load any image URL or data URI into a normalized PNG data URL with dimensions
@@ -261,8 +275,15 @@ export const exportStatementToPdf = async (
     monthWiseGroups,
     categoryWiseRows,
     orientation = 'portrait',
-    filename
+    filename,
+    accentColor,
+    customTitle
   } = params;
+
+  const primaryRgb = hexToRgbTuple(
+    accentColor || settings?.statementAccentColor || '#0f172a',
+    [15, 23, 42]
+  );
 
   const isUaeDirham =
     currencyCode?.toUpperCase() === 'AED' || currencySymbol === '\u20C3';
@@ -316,7 +337,7 @@ export const exportStatementToPdf = async (
     );
     leftX += maxLogoBox + 4;
   } else {
-    doc.setFillColor(15, 23, 42);
+    doc.setFillColor(primaryRgb[0], primaryRgb[1], primaryRgb[2]);
     doc.roundedRect(leftX, cursorY, 14, 14, 2, 2, 'F');
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(11);
@@ -363,9 +384,11 @@ export const exportStatementToPdf = async (
   let rightY = cursorY + 4.5;
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(15);
-  doc.setTextColor(15, 23, 42);
+  doc.setTextColor(primaryRgb[0], primaryRgb[1], primaryRgb[2]);
   const docTitle =
-    ledgerSource === 'expenses' ? 'EXPENSE STATEMENT' : 'STATEMENT OF ACCOUNT';
+    ledgerSource === 'expenses'
+      ? 'EXPENSE STATEMENT'
+      : (customTitle || settings?.statementCustomTitle || 'STATEMENT OF ACCOUNT').toUpperCase();
   doc.text(docTitle, rightX, rightY, { align: 'right' });
   rightY += 5.5;
 
@@ -442,7 +465,7 @@ export const exportStatementToPdf = async (
   cursorY = Math.max(companyY, rightY) + 2.5;
 
   // Heavy Divider Rule
-  doc.setDrawColor(15, 23, 42);
+  doc.setDrawColor(primaryRgb[0], primaryRgb[1], primaryRgb[2]);
   doc.setLineWidth(0.6);
   doc.line(margin, cursorY, pageWidth - margin, cursorY);
   cursorY += 5;
@@ -517,12 +540,12 @@ export const exportStatementToPdf = async (
 
   // Right Box: Account Summary
   const sumX = margin + halfWidth + colGap;
-  doc.setDrawColor(15, 23, 42);
+  doc.setDrawColor(primaryRgb[0], primaryRgb[1], primaryRgb[2]);
   doc.setLineWidth(0.35);
   doc.roundedRect(sumX, cursorY, halfWidth, summaryBoxHeight, 2, 2, 'S');
 
   // Summary Header Band
-  doc.setFillColor(15, 23, 42);
+  doc.setFillColor(primaryRgb[0], primaryRgb[1], primaryRgb[2]);
   doc.roundedRect(sumX, cursorY, halfWidth, 6.8, 1.8, 1.8, 'F');
   doc.rect(sumX, cursorY + 3.5, halfWidth, 3.3, 'F'); // square bottom corners of header band
 
@@ -672,7 +695,7 @@ export const exportStatementToPdf = async (
 
   const drawTableHeader = (y: number): number => {
     const headerH = 7.5;
-    doc.setFillColor(15, 23, 42);
+    doc.setFillColor(primaryRgb[0], primaryRgb[1], primaryRgb[2]);
     doc.rect(margin, y, contentWidth, headerH, 'F');
 
     doc.setFont('helvetica', 'bold');

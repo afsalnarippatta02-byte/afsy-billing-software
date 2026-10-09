@@ -46,6 +46,7 @@ import {
 import UserManagementSettings from './UserManagementSettings';
 import SignatureSealSettingsSection from './SignatureSealSettingsSection';
 import AICustomizationPanel from './AICustomizationPanel';
+import DocumentTemplatesSettingsSection from './DocumentTemplatesSettingsSection';
 import { 
   gatherAppBackupPayload, 
   downloadLocalBackupJSON, 
@@ -134,7 +135,7 @@ export const Settings: React.FC<SettingsProps> = ({
   onTriggerTestBlink,
   language = 'en'
 }) => {
-  const [activeTab, setActiveTab] = useState<'company' | 'signature' | 'ai' | 'users' | 'backup'>('company');
+  const [activeTab, setActiveTab] = useState<'company' | 'templates' | 'signature' | 'ai' | 'users' | 'backup'>('company');
   const [formData, setFormData] = useState<CompanySettings>(settings);
   const [isSavedModalOpen, setIsSavedModalOpen] = useState(false);
   const [saveToast, setSaveToast] = useState<{ show: boolean; msg?: string; type?: 'success' | 'error' }>({ show: false });
@@ -302,8 +303,6 @@ export const Settings: React.FC<SettingsProps> = ({
           handleFieldChange('logoUrl', svgData);
           setUrlInput('');
           setIsProcessingImage(false);
-          setSaveToast({ show: true, msg: 'Vector SVG logo ready! Click "Save Changes" to apply.', type: 'success' });
-          setTimeout(() => setSaveToast({ show: false }), 3500);
         }
       };
       reader.onerror = () => {
@@ -346,8 +345,6 @@ export const Settings: React.FC<SettingsProps> = ({
           handleFieldChange('logoUrl', compressedDataUrl);
           setUrlInput('');
           setIsProcessingImage(false);
-          setSaveToast({ show: true, msg: 'Logo ready! Click "Save Changes" to apply.', type: 'success' });
-          setTimeout(() => setSaveToast({ show: false }), 3500);
         } else {
           setIsProcessingImage(false);
         }
@@ -382,25 +379,19 @@ export const Settings: React.FC<SettingsProps> = ({
     }
   };
 
-  const handleApplyPreset = (presetSvg: string, presetName: string) => {
+  const handleApplyPreset = (presetSvg: string, _presetName: string) => {
     handleFieldChange('logoUrl', presetSvg);
     setUrlInput('');
-    setSaveToast({ show: true, msg: `Selected "${presetName}". Click "Save Changes" to apply.`, type: 'success' });
-    setTimeout(() => setSaveToast({ show: false }), 3000);
   };
 
   const handleRemoveLogo = () => {
     handleFieldChange('logoUrl', '');
     setUrlInput('');
-    setSaveToast({ show: true, msg: 'Logo cleared. Default AF monogram will be used.', type: 'success' });
-    setTimeout(() => setSaveToast({ show: false }), 3000);
   };
 
   const handleRestoreDefaultLogo = () => {
     handleFieldChange('logoUrl', AF_LOGO_SVG_DATA_URI);
     setUrlInput('');
-    setSaveToast({ show: true, msg: 'Restored original Af© brand logo!', type: 'success' });
-    setTimeout(() => setSaveToast({ show: false }), 3000);
   };
 
   const handleCountryChange = (countryCode: string) => {
@@ -417,12 +408,6 @@ export const Settings: React.FC<SettingsProps> = ({
         taxRate: selectedCountry.defaultTaxRate,
         defaultTaxRate: selectedCountry.defaultTaxRate
       }));
-      setSaveToast({ 
-        show: true, 
-        msg: `Applied country settings for ${selectedCountry.name} (${selectedCountry.defaultCurrency} - ${selectedCountry.currencySymbol})`, 
-        type: 'success' 
-      });
-      setTimeout(() => setSaveToast({ show: false }), 3500);
     } else {
       handleFieldChange('country', countryCode);
     }
@@ -632,7 +617,7 @@ export const Settings: React.FC<SettingsProps> = ({
         </div>
       )}
 
-      {/* Header with Save Status */}
+      {/* Header with Manual Save Controls */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight flex items-center gap-2.5">
@@ -640,30 +625,37 @@ export const Settings: React.FC<SettingsProps> = ({
             {t('settings.title', 'System Settings & Branding')}
           </h1>
           <p className="text-sm text-slate-500 dark:text-slate-400 font-medium mt-0.5">
-            Manage company profile, tax registration, Google Drive cloud auto-sync, and user credentials.
+            Manage company profile, templates, signature &amp; seal, AI controls, and cloud backup. Click <strong>Save Settings</strong> to apply changes.
           </p>
         </div>
 
-        {hasChanges && (
-          <div className="flex items-center space-x-3">
-            <button
-              type="button"
-              onClick={handleReset}
-              className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl text-xs font-bold text-slate-500 dark:text-slate-400 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all shadow-2xs"
-            >
-              <RotateCcw size={14} />
-              <span>Discard</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSave()}
-              className="flex items-center space-x-2 bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-xl text-xs font-black shadow-md shadow-indigo-100 dark:shadow-none transition-all active:scale-95"
-            >
-              <Save size={15} />
-              <span>Save Changes</span>
-            </button>
-          </div>
-        )}
+        <div className="flex items-center space-x-2.5">
+          {hasChanges && (
+            <>
+              <span className="hidden md:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-800 text-[11px] font-bold text-amber-700 dark:text-amber-300">
+                <Clock size={12} />
+                <span>Unsaved Changes</span>
+              </span>
+              <button
+                type="button"
+                onClick={handleReset}
+                className="flex items-center space-x-1.5 px-3.5 py-2.5 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-300 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all shadow-2xs"
+              >
+                <RotateCcw size={14} />
+                <span>Discard</span>
+              </button>
+            </>
+          )}
+          <button
+            type="button"
+            disabled={isSaving}
+            onClick={() => handleSave()}
+            className="flex items-center space-x-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white px-5 py-2.5 rounded-xl text-xs font-black shadow-md shadow-indigo-100 dark:shadow-none transition-all active:scale-95"
+          >
+            <Save size={15} />
+            <span>{isSaving ? 'Saving...' : 'Save Settings'}</span>
+          </button>
+        </div>
       </div>
 
       {/* Settings Navigation Tabs */}
@@ -679,6 +671,19 @@ export const Settings: React.FC<SettingsProps> = ({
         >
           <Building2 size={16} className={activeTab === 'company' ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400'} />
           <span>{t('settings.company_tab', 'Company Identity')}</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('templates')}
+          className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${
+            activeTab === 'templates'
+              ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-white/50 dark:hover:bg-slate-700/50'
+          }`}
+        >
+          <LayoutTemplate size={16} className={activeTab === 'templates' ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400'} />
+          <span>Templates &amp; Formats</span>
         </button>
 
         <button
@@ -735,6 +740,40 @@ export const Settings: React.FC<SettingsProps> = ({
       </div>
 
       {/* ========================================================================= */}
+      {/* TAB: INVOICE & STATEMENT TEMPLATES & FORMAT CUSTOMIZATION                 */}
+      {/* ========================================================================= */}
+      {activeTab === 'templates' && (
+        <form onSubmit={handleSave} className="space-y-6 animate-in fade-in">
+          <DocumentTemplatesSettingsSection
+            formData={formData}
+            onUpdateFields={partial => {
+              setFormData(prev => ({ ...prev, ...partial }));
+            }}
+          />
+          <div className="flex items-center justify-end gap-3">
+            {hasChanges && (
+              <button
+                type="button"
+                onClick={handleReset}
+                className="flex items-center space-x-1.5 px-4 py-3.5 rounded-2xl text-xs font-bold text-slate-600 dark:text-slate-300 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 transition-all"
+              >
+                <RotateCcw size={14} />
+                <span>Discard Changes</span>
+              </button>
+            )}
+            <button
+              type="submit"
+              disabled={isSaving}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3.5 rounded-2xl font-black text-xs shadow-lg flex items-center gap-2 transition-all active:scale-95"
+            >
+              <Save size={16} />
+              <span>{isSaving ? 'Saving Format Settings...' : 'Save Template & Format Settings'}</span>
+            </button>
+          </div>
+        </form>
+      )}
+
+      {/* ========================================================================= */}
       {/* TAB: SIGNATURE & SEAL TAB */}
       {/* ========================================================================= */}
       {activeTab === 'signature' && (
@@ -747,7 +786,17 @@ export const Settings: React.FC<SettingsProps> = ({
               setTimeout(() => setSaveToast({ show: false }), 3500);
             }}
           />
-          <div className="flex justify-end">
+          <div className="flex items-center justify-end gap-3">
+            {hasChanges && (
+              <button
+                type="button"
+                onClick={handleReset}
+                className="flex items-center space-x-1.5 px-4 py-3.5 rounded-2xl text-xs font-bold text-slate-600 dark:text-slate-300 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 transition-all"
+              >
+                <RotateCcw size={14} />
+                <span>Discard Changes</span>
+              </button>
+            )}
             <button
               type="submit"
               disabled={isSaving}
@@ -764,17 +813,35 @@ export const Settings: React.FC<SettingsProps> = ({
       {/* TAB: AI & INTERFACE CUSTOMIZATION TAB */}
       {/* ========================================================================= */}
       {activeTab === 'ai' && (
-        <div className="space-y-6 animate-in fade-in">
+        <form onSubmit={handleSave} className="space-y-6 animate-in fade-in">
           <AICustomizationPanel
             settings={formData}
             onUpdateSettings={partial => {
-              const updated = { ...formData, ...partial };
-              setFormData(updated);
-              onUpdate(updated);
+              setFormData(prev => ({ ...prev, ...partial }));
             }}
             onTriggerTestBlink={onTriggerTestBlink}
           />
-        </div>
+          <div className="flex items-center justify-end gap-3">
+            {hasChanges && (
+              <button
+                type="button"
+                onClick={handleReset}
+                className="flex items-center space-x-1.5 px-4 py-3.5 rounded-2xl text-xs font-bold text-slate-600 dark:text-slate-300 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 transition-all"
+              >
+                <RotateCcw size={14} />
+                <span>Discard Changes</span>
+              </button>
+            )}
+            <button
+              type="submit"
+              disabled={isSaving}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3.5 rounded-2xl font-black text-xs shadow-lg flex items-center gap-2 transition-all active:scale-95"
+            >
+              <Save size={16} />
+              <span>{isSaving ? 'Saving AI & Interface Settings...' : 'Save AI & Interface Settings'}</span>
+            </button>
+          </div>
+        </form>
       )}
 
       {/* ========================================================================= */}
@@ -976,16 +1043,16 @@ export const Settings: React.FC<SettingsProps> = ({
                 </p>
               </div>
 
-              {/* Auto Sync Toggle */}
+              {/* Cloud Sync Toggle */}
               <div className="space-y-2">
                 <label className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
                   <FolderSync size={14} className="text-indigo-600 dark:text-indigo-400" />
-                  Auto-Sync on Every Data Change
+                  Cloud Backup Sync Option
                 </label>
                 <div className="p-4 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-700 flex items-center justify-between">
                   <div>
-                    <p className="text-xs font-bold text-slate-900 dark:text-white">Continuous Cloud Sync</p>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400">Maintains real-time backup across sessions.</p>
+                    <p className="text-xs font-bold text-slate-900 dark:text-white">Sync on Manual Save</p>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">Syncs backup when you save records or settings.</p>
                   </div>
                   <input
                     type="checkbox"
@@ -995,6 +1062,18 @@ export const Settings: React.FC<SettingsProps> = ({
                   />
                 </div>
               </div>
+            </div>
+
+            <div className="flex justify-end pt-3 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                disabled={isSaving}
+                onClick={() => handleSave()}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2.5 rounded-xl font-black text-xs shadow-md flex items-center gap-2 transition-all active:scale-95"
+              >
+                <Save size={15} />
+                <span>{isSaving ? 'Saving...' : 'Save Sync Settings'}</span>
+              </button>
             </div>
           </div>
 

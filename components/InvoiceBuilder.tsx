@@ -26,10 +26,11 @@ import {
   FileBadge,
   AlertTriangle,
   PenTool,
-  Stamp
+  Stamp,
+  LayoutTemplate
 } from 'lucide-react';
 import { Invoice, InvoiceStatus, LineItem, Client, CompanySettings, UserRole, PaymentMethod } from '../types';
-import { SERVICE_PRESETS } from '../constants';
+import { SERVICE_PRESETS, INVOICE_TEMPLATE_PRESETS } from '../constants';
 import { geminiService } from '../services/geminiService';
 import { downloadElementAsPdf, printElementDirectly, downloadDocumentAsHtml } from '../utils/pdfExport';
 import { getCurrencySymbol } from '../utils/currency';
@@ -132,6 +133,39 @@ export const InvoiceBuilder: React.FC<InvoiceBuilderProps> = ({
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [exportStatusMsg, setExportStatusMsg] = useState<string>('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+  // Active Invoice Template & Format Customization State (synced from Settings, with quick switcher support)
+  const [activeTemplateId, setActiveTemplateId] = useState<string>(
+    () => settings.invoiceTemplate || 'executive_indigo'
+  );
+
+  useEffect(() => {
+    if (settings.invoiceTemplate) {
+      setActiveTemplateId(settings.invoiceTemplate);
+    }
+  }, [settings.invoiceTemplate]);
+
+  const activePreset =
+    INVOICE_TEMPLATE_PRESETS.find(p => p.id === activeTemplateId) || INVOICE_TEMPLATE_PRESETS[0];
+  const isCustomMatchesSettings = activeTemplateId === (settings.invoiceTemplate || 'executive_indigo');
+  const invAccentColor = isCustomMatchesSettings
+    ? settings.invoiceAccentColor || activePreset.accentColor
+    : activePreset.accentColor;
+  const invHeaderLayout = isCustomMatchesSettings
+    ? settings.invoiceHeaderLayout || activePreset.headerLayout
+    : activePreset.headerLayout;
+  const invTableStyle = isCustomMatchesSettings
+    ? settings.invoiceTableStyle || activePreset.tableStyle
+    : activePreset.tableStyle;
+  const invFontStyle = isCustomMatchesSettings
+    ? settings.invoiceFontStyle || activePreset.fontStyle || 'sans'
+    : activePreset.fontStyle || 'sans';
+  const invCompact = isCustomMatchesSettings
+    ? settings.invoiceCompactMode ?? Boolean(activePreset.compactMode)
+    : Boolean(activePreset.compactMode);
+  const invShowCatCol = settings.invoiceShowCategoryCol !== false;
+  const invShowBankBox = settings.invoiceShowBankDetails !== false;
+  const invCustomHeading = settings.invoiceCustomTitle || 'TAX INVOICE';
 
   // Quick Client Creation Modal State
   const [isAddingClient, setIsAddingClient] = useState(false);
@@ -452,6 +486,23 @@ ${settings.email || ''}`;
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {/* Quick Invoice Template Selector */}
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+              <LayoutTemplate size={13} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
+              <select
+                value={activeTemplateId}
+                onChange={e => setActiveTemplateId(e.target.value)}
+                title="Select Invoice Template Format"
+                className="bg-transparent text-xs font-bold text-slate-800 dark:text-slate-200 outline-none cursor-pointer"
+              >
+                {INVOICE_TEMPLATE_PRESETS.map(tp => (
+                  <option key={tp.id} value={tp.id} className="bg-white dark:bg-slate-900">
+                    Template: {tp.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             {/* Separate Enable / Disable Signature & Seal Toggles */}
             <button
               type="button"
@@ -545,19 +596,66 @@ ${settings.email || ''}`;
       {/* Main A4 Printable Document Sheet */}
       <div
         id="invoice-printable-document"
-        className={`bg-white rounded-3xl p-5 sm:p-8 md:p-12 border shadow-xl print-container transition-all text-slate-900 ${
-          isQuotation
-            ? 'border-amber-300 border-t-8 border-t-amber-500'
+        style={{
+          borderTopWidth: invHeaderLayout === 'banner' ? '1px' : '8px',
+          borderTopColor: isQuotation
+            ? '#f59e0b'
             : isProforma
-            ? 'border-purple-300 border-t-8 border-t-purple-600'
-            : 'border-slate-200 border-t-8 border-t-indigo-600'
+            ? '#9333ea'
+            : invAccentColor
+        }}
+        className={`bg-white rounded-3xl ${
+          invCompact ? 'p-4 sm:p-6 md:p-8' : 'p-5 sm:p-8 md:p-12'
+        } border shadow-xl print-container transition-all text-slate-900 ${
+          invFontStyle === 'serif'
+            ? 'font-serif'
+            : invFontStyle === 'mono'
+            ? 'font-mono'
+            : 'font-sans'
+        } ${
+          activeTemplateId === 'classic_ledger'
+            ? 'border-2 border-slate-800'
+            : isQuotation
+            ? 'border-amber-300'
+            : isProforma
+            ? 'border-purple-300'
+            : 'border-slate-200'
         }`}
       >
         {/* Top Header Section */}
-        <div className="flex flex-col md:flex-row justify-between items-start gap-6 pb-8 border-b-2 border-slate-100">
+        <div
+          style={
+            invHeaderLayout === 'banner'
+              ? {
+                  backgroundColor: isQuotation
+                    ? '#d97706'
+                    : isProforma
+                    ? '#7e22ce'
+                    : invAccentColor
+                }
+              : { borderBottomColor: invTableStyle === 'bordered' ? invAccentColor : undefined }
+          }
+          className={`flex flex-col gap-6 pb-8 border-b-2 border-slate-100 ${
+            invHeaderLayout === 'banner'
+              ? 'p-6 sm:p-8 rounded-2xl text-white mb-2 border-b-0 md:flex-row justify-between items-start'
+              : invHeaderLayout === 'centered'
+              ? 'items-center text-center'
+              : invHeaderLayout === 'reversed'
+              ? 'md:flex-row-reverse justify-between items-start'
+              : 'md:flex-row justify-between items-start'
+          }`}
+        >
           {/* Left: Company Branding & Details */}
-          <div className="space-y-3 max-w-sm">
-            <div className="flex items-center space-x-3.5">
+          <div
+            className={`space-y-3 max-w-sm ${
+              invHeaderLayout === 'centered' ? 'flex flex-col items-center text-center' : ''
+            }`}
+          >
+            <div
+              className={`flex items-center gap-3.5 ${
+                invHeaderLayout === 'centered' ? 'flex-col' : ''
+              }`}
+            >
               {settings.logoUrl ? (
                 <div className="w-16 h-16 rounded-2xl bg-white border border-slate-200 p-1.5 flex items-center justify-center shadow-sm overflow-hidden flex-shrink-0">
                   <img
@@ -568,39 +666,78 @@ ${settings.email || ''}`;
                   />
                 </div>
               ) : (
-                <div className="w-14 h-14 bg-indigo-600 rounded-2xl flex items-center justify-center text-white font-black text-2xl shadow-md">
+                <div
+                  style={{
+                    backgroundColor:
+                      invHeaderLayout === 'banner' ? 'rgba(255,255,255,0.2)' : invAccentColor
+                  }}
+                  className="w-14 h-14 rounded-2xl flex items-center justify-center text-white font-black text-2xl shadow-md"
+                >
                   Af
                 </div>
               )}
               <div>
-                <h2 className="text-xl font-black text-slate-900 tracking-tight uppercase leading-tight">
+                <h2
+                  className={`text-xl font-black tracking-tight uppercase leading-tight ${
+                    invHeaderLayout === 'banner' ? 'text-white' : 'text-slate-900'
+                  }`}
+                >
                   {settings.name || 'Af© ACCOUNTS'}
                 </h2>
-                {settings.vatNumber && (
-                  <div className="inline-flex items-center space-x-1 bg-slate-100 text-slate-800 px-2.5 py-0.5 rounded-md text-[11px] font-black tracking-wider mt-1">
-                    <span>TRN: {settings.vatNumber}</span>
+                {(settings.vatNumber || settings.trnNumber) && (
+                  <div
+                    className={`inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-md text-[11px] font-black tracking-wider mt-1 ${
+                      invHeaderLayout === 'banner'
+                        ? 'bg-white/20 text-white'
+                        : 'bg-slate-100 text-slate-800'
+                    }`}
+                  >
+                    <span>TRN: {settings.vatNumber || settings.trnNumber}</span>
                   </div>
                 )}
               </div>
             </div>
 
-            <div className="text-xs text-slate-500 space-y-1 font-medium leading-relaxed pt-1">
+            <div
+              className={`text-xs space-y-1 font-medium leading-relaxed pt-1 ${
+                invHeaderLayout === 'banner' ? 'text-white/85' : 'text-slate-500'
+              }`}
+            >
               {settings.address && (
-                <p className="flex items-start space-x-1.5">
-                  <MapPin size={13} className="text-slate-400 mt-0.5 flex-shrink-0" />
+                <p
+                  className={`flex items-start space-x-1.5 ${
+                    invHeaderLayout === 'centered' ? 'justify-center' : ''
+                  }`}
+                >
+                  <MapPin
+                    size={13}
+                    className={`${
+                      invHeaderLayout === 'banner' ? 'text-white/75' : 'text-slate-400'
+                    } mt-0.5 flex-shrink-0`}
+                  />
                   <span className="whitespace-pre-line">{settings.address}</span>
                 </p>
               )}
-              <div className="flex flex-wrap gap-x-4 gap-y-1 pt-0.5">
+              <div
+                className={`flex flex-wrap gap-x-4 gap-y-1 pt-0.5 ${
+                  invHeaderLayout === 'centered' ? 'justify-center' : ''
+                }`}
+              >
                 {settings.email && (
                   <p className="flex items-center space-x-1">
-                    <Mail size={12} className="text-slate-400" />
+                    <Mail
+                      size={12}
+                      className={invHeaderLayout === 'banner' ? 'text-white/75' : 'text-slate-400'}
+                    />
                     <span>{settings.email}</span>
                   </p>
                 )}
                 {settings.phone && (
                   <p className="flex items-center space-x-1">
-                    <Phone size={12} className="text-slate-400" />
+                    <Phone
+                      size={12}
+                      className={invHeaderLayout === 'banner' ? 'text-white/75' : 'text-slate-400'}
+                    />
                     <span>{settings.phone}</span>
                   </p>
                 )}
@@ -609,15 +746,33 @@ ${settings.email || ''}`;
           </div>
 
           {/* Right: Document Title, ID & Status */}
-          <div className="w-full md:w-auto flex flex-col md:items-end justify-between space-y-4">
-            <div className="md:text-right">
+          <div
+            className={`w-full md:w-auto flex flex-col justify-between space-y-4 ${
+              invHeaderLayout === 'centered'
+                ? 'items-center text-center'
+                : invHeaderLayout === 'reversed'
+                ? 'md:items-start md:text-left'
+                : 'md:items-end'
+            }`}
+          >
+            <div
+              className={
+                invHeaderLayout === 'centered'
+                  ? 'text-center'
+                  : invHeaderLayout === 'reversed'
+                  ? 'md:text-left'
+                  : 'md:text-right'
+              }
+            >
               <span
                 className={`text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full inline-block mb-2 ${
-                  isQuotation
+                  invHeaderLayout === 'banner'
+                    ? 'bg-white/20 text-white'
+                    : isQuotation
                     ? 'bg-amber-100 text-amber-800'
                     : isProforma
                     ? 'bg-purple-100 text-purple-800'
-                    : 'bg-indigo-50 text-indigo-700'
+                    : 'bg-slate-100 text-slate-800'
                 }`}
               >
                 {isQuotation
@@ -626,8 +781,24 @@ ${settings.email || ''}`;
                   ? 'Preliminary Proforma Billing'
                   : 'Official UAE Tax Document'}
               </span>
-              <h1 className="text-2xl sm:text-3xl md:text-4xl font-black text-slate-900 uppercase tracking-tight leading-none">
-                {isQuotation ? 'QUOTATION' : isProforma ? 'PROFORMA INVOICE' : 'TAX INVOICE'}
+              <h1
+                style={{
+                  color:
+                    invHeaderLayout === 'banner'
+                      ? '#ffffff'
+                      : isQuotation
+                      ? '#d97706'
+                      : isProforma
+                      ? '#7e22ce'
+                      : invAccentColor
+                }}
+                className="text-2xl sm:text-3xl md:text-4xl font-black uppercase tracking-tight leading-none"
+              >
+                {isQuotation
+                  ? 'QUOTATION'
+                  : isProforma
+                  ? 'PROFORMA INVOICE'
+                  : invCustomHeading}
               </h1>
             </div>
 
@@ -789,132 +960,192 @@ ${settings.email || ''}`;
 
         {/* Line Items Table */}
         <div className="py-6 overflow-x-auto">
-          <table className="w-full text-left border-collapse min-w-[600px]">
-            <thead>
-              <tr className="border-b-2 border-slate-900 text-slate-900 text-[10px] font-black uppercase tracking-wider">
-                <th className="py-3 pr-3 w-48">Category & Service</th>
-                <th className="py-3 px-3">Deliverable Description</th>
-                <th className="py-3 px-2 w-20 text-center">Qty</th>
-                <th className="py-3 px-2 w-32 text-right">Rate ({currSym})</th>
-                <th className="py-3 pl-2 w-36 text-right">Line Total ({currSym})</th>
-                <th className="no-print py-3 pl-2 w-10 text-right"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200 text-sm">
-              {invoice.items.map(item => (
-                <tr key={item.id} className="group">
-                  <td className="py-3.5 pr-3 align-top">
-                    <div className="no-print space-y-1.5">
-                      <select
-                        value={item.category}
-                        onChange={e => {
-                          const cat = e.target.value;
-                          const preset = SERVICE_PRESETS.find(p => p.category === cat);
-                          updateItem(item.id, {
-                            category: cat,
-                            service: preset?.services[0] || 'Service'
-                          });
-                        }}
-                        className="w-full bg-slate-100 text-slate-900 rounded-lg px-2.5 py-1.5 text-xs font-black outline-none"
+          <div
+            className={
+              invTableStyle === 'bordered'
+                ? 'border border-slate-300 rounded-xl overflow-hidden'
+                : ''
+            }
+          >
+            <table className="w-full text-left border-collapse min-w-[600px]">
+              <thead>
+                <tr
+                  style={
+                    invTableStyle === 'minimal'
+                      ? { borderBottomColor: invAccentColor }
+                      : { backgroundColor: invAccentColor, color: '#ffffff' }
+                  }
+                  className={`text-[10px] font-black uppercase tracking-wider ${
+                    invTableStyle === 'minimal'
+                      ? 'border-b-2 text-slate-900'
+                      : 'text-white'
+                  }`}
+                >
+                  {invShowCatCol && <th className="py-3 px-3 w-48">Category &amp; Service</th>}
+                  <th className="py-3 px-3">Deliverable Description</th>
+                  <th className="py-3 px-2 w-20 text-center">Qty</th>
+                  <th className="py-3 px-2 w-32 text-right">Rate ({currSym})</th>
+                  <th className="py-3 px-3 w-36 text-right">Line Total ({currSym})</th>
+                  <th className="no-print py-3 px-2 w-10 text-right"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200 text-sm">
+                {invoice.items.map((item, idx) => (
+                  <tr
+                    key={item.id}
+                    className={`group ${
+                      invTableStyle === 'striped' && idx % 2 === 1 ? 'bg-slate-50/80' : 'bg-white'
+                    }`}
+                  >
+                    {invShowCatCol && (
+                      <td
+                        className={`${
+                          invCompact ? 'py-2 px-3' : 'py-3.5 px-3'
+                        } align-top ${
+                          invTableStyle === 'bordered' ? 'border-r border-slate-200' : ''
+                        }`}
                       >
-                        {SERVICE_PRESETS.map(p => (
-                          <option key={p.category} value={p.category}>
-                            {p.category}
-                          </option>
-                        ))}
-                      </select>
-                      <input
-                        type="text"
-                        value={item.service}
-                        onChange={e => updateItem(item.id, { service: e.target.value })}
-                        placeholder="Sub-service..."
-                        className="w-full bg-slate-50 border border-slate-200 text-slate-700 rounded-lg px-2.5 py-1 text-xs font-bold outline-none"
-                      />
-                    </div>
-                    <div className="hidden print:block">
-                      <p className="font-black text-slate-900 text-xs">{item.category}</p>
-                      <p className="text-[11px] font-bold text-slate-500">{item.service}</p>
-                    </div>
-                  </td>
+                        <div className="no-print space-y-1.5">
+                          <select
+                            value={item.category}
+                            onChange={e => {
+                              const cat = e.target.value;
+                              const preset = SERVICE_PRESETS.find(p => p.category === cat);
+                              updateItem(item.id, {
+                                category: cat,
+                                service: preset?.services[0] || 'Service'
+                              });
+                            }}
+                            className="w-full bg-slate-100 text-slate-900 rounded-lg px-2.5 py-1.5 text-xs font-black outline-none"
+                          >
+                            {SERVICE_PRESETS.map(p => (
+                              <option key={p.category} value={p.category}>
+                                {p.category}
+                              </option>
+                            ))}
+                          </select>
+                          <input
+                            type="text"
+                            value={item.service}
+                            onChange={e => updateItem(item.id, { service: e.target.value })}
+                            placeholder="Sub-service..."
+                            className="w-full bg-slate-50 border border-slate-200 text-slate-700 rounded-lg px-2.5 py-1 text-xs font-bold outline-none"
+                          />
+                        </div>
+                        <div className="hidden print:block">
+                          <p className="font-black text-slate-900 text-xs">{item.category}</p>
+                          <p className="text-[11px] font-bold text-slate-500">{item.service}</p>
+                        </div>
+                      </td>
+                    )}
 
-                  <td className="py-3.5 px-3 align-top">
-                    <div className="no-print flex items-center space-x-1.5">
-                      <input
-                        type="text"
-                        value={item.description}
-                        onChange={e => updateItem(item.id, { description: e.target.value })}
-                        placeholder="Describe scope, deliverables, shoot days..."
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium text-slate-900 outline-none focus:ring-2 focus:ring-indigo-500"
-                      />
+                    <td
+                      className={`${
+                        invCompact ? 'py-2 px-3' : 'py-3.5 px-3'
+                      } align-top ${
+                        invTableStyle === 'bordered' ? 'border-r border-slate-200' : ''
+                      }`}
+                    >
+                      <div className="no-print flex items-center space-x-1.5">
+                        <input
+                          type="text"
+                          value={item.description}
+                          onChange={e => updateItem(item.id, { description: e.target.value })}
+                          placeholder="Describe scope, deliverables, shoot days..."
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium text-slate-900 outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handlePolish(item)}
+                          disabled={isPolishing === item.id}
+                          title="Polish description with AI (Works Online & Offline)"
+                          className="p-2 bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white rounded-xl transition-all flex-shrink-0"
+                        >
+                          {isPolishing === item.id ? (
+                            <Loader2 size={14} className="animate-spin" />
+                          ) : (
+                            <Sparkles size={14} />
+                          )}
+                        </button>
+                      </div>
+                      <div className="item-description-print hidden print:block text-xs text-slate-800 font-medium">
+                        {item.description || item.service}
+                      </div>
+                    </td>
+
+                    <td
+                      className={`${
+                        invCompact ? 'py-2 px-2' : 'py-3.5 px-2'
+                      } text-center align-top ${
+                        invTableStyle === 'bordered' ? 'border-r border-slate-200' : ''
+                      }`}
+                    >
+                      <div className="no-print flex justify-center">
+                        <input
+                          type="number"
+                          min="1"
+                          value={item.quantity}
+                          onChange={e =>
+                            updateItem(item.id, {
+                              quantity: Math.max(1, parseInt(e.target.value) || 0)
+                            })
+                          }
+                          className="w-16 text-center font-bold text-slate-900 bg-slate-100 rounded-lg py-1.5 px-1 outline-none text-xs"
+                        />
+                      </div>
+                      <div className="item-qty-print hidden print:block font-bold text-slate-900 text-xs text-center">
+                        {item.quantity}
+                      </div>
+                    </td>
+
+                    <td
+                      className={`${
+                        invCompact ? 'py-2 px-2' : 'py-3.5 px-2'
+                      } text-right align-top ${
+                        invTableStyle === 'bordered' ? 'border-r border-slate-200' : ''
+                      }`}
+                    >
+                      <div className="no-print flex justify-end">
+                        <input
+                          type="number"
+                          min="0"
+                          value={item.rate}
+                          onChange={e =>
+                            updateItem(item.id, { rate: parseFloat(e.target.value) || 0 })
+                          }
+                          className="w-28 text-right font-bold bg-slate-100 text-slate-900 rounded-lg py-1.5 px-2 outline-none text-xs"
+                        />
+                      </div>
+                      <div className="item-rate-print hidden print:block font-bold text-slate-900 text-xs text-right">
+                        {item.rate.toLocaleString()}
+                      </div>
+                    </td>
+
+                    <td
+                      className={`${
+                        invCompact ? 'py-2 px-3' : 'py-3.5 px-3'
+                      } text-right font-black text-slate-900 align-top whitespace-nowrap`}
+                    >
+                      <span className="text-xs sm:text-sm">
+                        {formatCurr(item.quantity * item.rate)}
+                      </span>
+                    </td>
+
+                    <td className="no-print w-10 text-right py-3.5 px-2 align-top">
                       <button
                         type="button"
-                        onClick={() => handlePolish(item)}
-                        disabled={isPolishing === item.id}
-                        title="Polish description with AI (Works Online & Offline)"
-                        className="p-2 bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white rounded-xl transition-all flex-shrink-0"
+                        onClick={() => removeItem(item.id)}
+                        className="p-1.5 text-rose-500 hover:text-white hover:bg-rose-600 bg-rose-50 rounded-lg transition-all"
+                        title="Delete line item"
                       >
-                        {isPolishing === item.id ? (
-                          <Loader2 size={14} className="animate-spin" />
-                        ) : (
-                          <Sparkles size={14} />
-                        )}
+                        <Trash2 size={14} />
                       </button>
-                    </div>
-                    <div className="item-description-print hidden print:block text-xs text-slate-800 font-medium">
-                      {item.description || item.service}
-                    </div>
-                  </td>
-
-                  <td className="py-3.5 px-2 text-center align-top">
-                    <div className="no-print flex justify-center">
-                      <input
-                        type="number"
-                        min="1"
-                        value={item.quantity}
-                        onChange={e =>
-                          updateItem(item.id, { quantity: Math.max(1, parseInt(e.target.value) || 0) })
-                        }
-                        className="w-16 text-center font-bold text-slate-900 bg-slate-100 rounded-lg py-1.5 px-1 outline-none text-xs"
-                      />
-                    </div>
-                    <div className="item-qty-print hidden print:block font-bold text-slate-900 text-xs text-center">
-                      {item.quantity}
-                    </div>
-                  </td>
-
-                  <td className="py-3.5 px-2 text-right align-top">
-                    <div className="no-print flex justify-end">
-                      <input
-                        type="number"
-                        min="0"
-                        value={item.rate}
-                        onChange={e => updateItem(item.id, { rate: parseFloat(e.target.value) || 0 })}
-                        className="w-28 text-right font-bold bg-slate-100 text-slate-900 rounded-lg py-1.5 px-2 outline-none text-xs"
-                      />
-                    </div>
-                    <div className="item-rate-print hidden print:block font-bold text-slate-900 text-xs text-right">
-                      {item.rate.toLocaleString()}
-                    </div>
-                  </td>
-
-                  <td className="py-3.5 pl-2 text-right font-black text-slate-900 align-top whitespace-nowrap">
-                    <span className="text-xs sm:text-sm">{formatCurr(item.quantity * item.rate)}</span>
-                  </td>
-
-                  <td className="no-print w-10 text-right py-3.5 align-top">
-                    <button
-                      type="button"
-                      onClick={() => removeItem(item.id)}
-                      className="p-1.5 text-rose-500 hover:text-white hover:bg-rose-600 bg-rose-50 rounded-lg transition-all"
-                      title="Delete line item"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
 
           <button
             type="button"
@@ -945,6 +1176,23 @@ ${settings.email || ''}`;
             <div className="notes-print hidden print:block text-xs text-slate-600 leading-relaxed whitespace-pre-line border-l-2 border-slate-300 pl-3">
               {invoice.notes}
             </div>
+            {invShowBankBox && (settings.bankName || settings.bankAccount) && (
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-1 mt-2">
+                <p className="font-black uppercase text-[10px] tracking-wider text-slate-500">
+                  Official Bank Remittance Details
+                </p>
+                {settings.bankName && (
+                  <p className="text-slate-700">
+                    <span className="font-bold">Bank Name:</span> {settings.bankName}
+                  </p>
+                )}
+                {settings.bankAccount && (
+                  <p className="text-slate-700">
+                    <span className="font-bold">Account / IBAN:</span> {settings.bankAccount}
+                  </p>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="w-full md:w-80 space-y-3 text-right">
@@ -957,13 +1205,14 @@ ${settings.email || ''}`;
               <span className="text-slate-900 font-black text-sm">{formatCurr(tax)}</span>
             </div>
             <div
-              className={`flex justify-between items-end pt-4 border-t-2 ${
-                isQuotation
-                  ? 'border-amber-500'
+              style={{
+                borderTopColor: isQuotation
+                  ? '#f59e0b'
                   : isProforma
-                  ? 'border-purple-600'
-                  : 'border-slate-900'
-              }`}
+                  ? '#9333ea'
+                  : invAccentColor
+              }}
+              className="flex justify-between items-end pt-4 border-t-2"
             >
               <div>
                 <span className="font-black text-slate-900 text-sm md:text-base tracking-tight uppercase block text-left">
@@ -976,13 +1225,14 @@ ${settings.email || ''}`;
               </div>
               <div className="text-right">
                 <span
-                  className={`text-2xl md:text-3xl font-black tracking-tight leading-none ${
-                    isQuotation
-                      ? 'text-amber-600'
+                  style={{
+                    color: isQuotation
+                      ? '#d97706'
                       : isProforma
-                      ? 'text-purple-600'
-                      : 'text-indigo-600'
-                  }`}
+                      ? '#9333ea'
+                      : invAccentColor
+                  }}
+                  className="text-2xl md:text-3xl font-black tracking-tight leading-none"
                 >
                   {formatCurr(total)}
                 </span>

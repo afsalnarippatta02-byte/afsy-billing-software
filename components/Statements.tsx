@@ -21,7 +21,8 @@ import {
   X,
   PenTool,
   Stamp,
-  FileText
+  FileText,
+  LayoutTemplate
 } from 'lucide-react';
 import {
   downloadElementAsPdf,
@@ -29,6 +30,7 @@ import {
   exportStatementToPdf,
   exportClearanceCertificateToPdf
 } from '../utils/pdfExport';
+import { STATEMENT_TEMPLATE_PRESETS } from '../constants';
 import { LanguageCode, getTranslation } from '../utils/translations';
 import { isInvoiceOverdue, getCurrencySymbol } from '../utils/currency';
 
@@ -84,8 +86,52 @@ export const Statements: React.FC<StatementsProps> = ({
   const [endDate, setEndDate] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
-  const [viewMode, setViewMode] = useState<StatementViewMode>('date_wise');
+  const [viewMode, setViewMode] = useState<StatementViewMode>(
+    () => settings?.statementDefaultView || 'date_wise'
+  );
   const [searchQuery, setSearchQuery] = useState<string>('');
+
+  // Statement Template & Format Customization State (synced with Settings + quick switcher)
+  const [activeStmtTemplateId, setActiveStmtTemplateId] = useState<string>(
+    () => settings?.statementTemplate || 'standard_audit'
+  );
+
+  useEffect(() => {
+    if (settings?.statementTemplate) {
+      setActiveStmtTemplateId(settings.statementTemplate);
+    }
+    if (settings?.statementDefaultView) {
+      setViewMode(settings.statementDefaultView);
+    }
+    if (settings?.statementDefaultOrientation) {
+      setPdfOrientation(settings.statementDefaultOrientation);
+    }
+  }, [
+    settings?.statementTemplate,
+    settings?.statementDefaultView,
+    settings?.statementDefaultOrientation
+  ]);
+
+  const activeStmtPreset =
+    STATEMENT_TEMPLATE_PRESETS.find(p => p.id === activeStmtTemplateId) ||
+    STATEMENT_TEMPLATE_PRESETS[0];
+  const isDefaultStmtSetting =
+    activeStmtTemplateId === (settings?.statementTemplate || 'standard_audit');
+  const stmtAccentColor = isDefaultStmtSetting
+    ? settings?.statementAccentColor || activeStmtPreset.accentColor
+    : activeStmtPreset.accentColor;
+  const stmtHeaderLayout = isDefaultStmtSetting
+    ? settings?.statementHeaderLayout || activeStmtPreset.headerLayout
+    : activeStmtPreset.headerLayout;
+  const stmtTableStyle = isDefaultStmtSetting
+    ? settings?.statementTableStyle || activeStmtPreset.tableStyle
+    : activeStmtPreset.tableStyle;
+  const stmtCompact = isDefaultStmtSetting
+    ? settings?.statementCompactMode ?? Boolean(activeStmtPreset.compactMode)
+    : Boolean(activeStmtPreset.compactMode);
+  const stmtShowSummaryBox = settings?.statementShowSummaryBox !== false;
+  const stmtShowRemittance = settings?.statementShowRemittance !== false;
+  const stmtCustomTitle = settings?.statementCustomTitle || 'STATEMENT OF ACCOUNT';
 
   // Separate Enable / Disable Auto-Apply States for Signature & Seal (synced with Settings)
   const [applySignature, setApplySignature] = useState<boolean>(
@@ -576,7 +622,9 @@ export const Statements: React.FC<StatementsProps> = ({
         monthWiseGroups,
         categoryWiseRows,
         orientation: orientationOverride || pdfOrientation,
-        filename
+        filename,
+        accentColor: stmtAccentColor,
+        customTitle: stmtCustomTitle
       });
       if (ok) {
         setPdfExportSuccess(true);
@@ -712,6 +760,23 @@ export const Statements: React.FC<StatementsProps> = ({
 
           {/* Export / Print Actions */}
           <div className="flex flex-wrap items-center gap-2">
+            {/* Quick Statement Template Selector */}
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+              <LayoutTemplate size={13} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
+              <select
+                value={activeStmtTemplateId}
+                onChange={e => setActiveStmtTemplateId(e.target.value)}
+                title="Select Statement Template Format"
+                className="bg-transparent text-xs font-bold text-slate-800 dark:text-slate-200 outline-none cursor-pointer"
+              >
+                {STATEMENT_TEMPLATE_PRESETS.map(tp => (
+                  <option key={tp.id} value={tp.id} className="bg-white dark:bg-slate-900">
+                    Template: {tp.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             {/* Separate & Combined Signature + Seal Quick Toggles */}
             <button
               type="button"
@@ -1010,12 +1075,37 @@ export const Statements: React.FC<StatementsProps> = ({
       {/* ===================================================================== */}
       <div
         id="standard-statement-sheet"
-        className="bg-white text-slate-900 rounded-2xl border border-slate-200/90 shadow-sm p-6 sm:p-10 md:p-12 space-y-8 print:shadow-none print:border-none print:p-0"
+        className={`bg-white text-slate-900 rounded-2xl border shadow-sm ${
+          stmtCompact ? 'p-5 sm:p-7 md:p-9 space-y-5' : 'p-6 sm:p-10 md:p-12 space-y-8'
+        } print:shadow-none print:border-none print:p-0 ${
+          activeStmtTemplateId === 'classic_boxed'
+            ? 'border-2 border-slate-800'
+            : 'border-slate-200/90'
+        }`}
       >
         {/* 1. STANDARD CORPORATE HEADER */}
-        <div className="flex flex-col sm:flex-row justify-between items-start gap-6 pb-6 border-b-2 border-slate-900">
+        <div
+          style={
+            stmtHeaderLayout === 'banner'
+              ? { backgroundColor: stmtAccentColor }
+              : { borderBottomColor: stmtAccentColor }
+          }
+          className={`flex flex-col gap-6 pb-6 border-b-2 ${
+            stmtHeaderLayout === 'banner'
+              ? 'p-6 sm:p-8 rounded-2xl text-white border-b-0 sm:flex-row justify-between items-start'
+              : stmtHeaderLayout === 'centered'
+              ? 'items-center text-center'
+              : stmtHeaderLayout === 'reversed'
+              ? 'sm:flex-row-reverse justify-between items-start'
+              : 'sm:flex-row justify-between items-start'
+          }`}
+        >
           {/* Company Branding & Legal Details */}
-          <div className="flex items-start gap-4">
+          <div
+            className={`flex items-start gap-4 ${
+              stmtHeaderLayout === 'centered' ? 'flex-col items-center text-center' : ''
+            }`}
+          >
             {settings?.logoUrl ? (
               <img
                 src={settings.logoUrl}
@@ -1024,57 +1114,138 @@ export const Statements: React.FC<StatementsProps> = ({
                 referrerPolicy="no-referrer"
               />
             ) : (
-              <div className="w-14 h-14 rounded-lg bg-slate-900 text-white flex items-center justify-center font-black text-lg shrink-0">
+              <div
+                style={{
+                  backgroundColor:
+                    stmtHeaderLayout === 'banner' ? 'rgba(255,255,255,0.2)' : stmtAccentColor
+                }}
+                className="w-14 h-14 rounded-lg text-white flex items-center justify-center font-black text-lg shrink-0"
+              >
                 Af
               </div>
             )}
             <div className="space-y-0.5">
-              <h2 className="text-lg sm:text-xl font-black text-slate-900 tracking-tight uppercase">
+              <h2
+                className={`text-lg sm:text-xl font-black tracking-tight uppercase ${
+                  stmtHeaderLayout === 'banner' ? 'text-white' : 'text-slate-900'
+                }`}
+              >
                 {settings?.name || 'AF© CREATIVE FLOW'}
               </h2>
               {settings?.address && (
-                <p className="text-xs text-slate-600 whitespace-pre-line leading-relaxed max-w-sm">
+                <p
+                  className={`text-xs whitespace-pre-line leading-relaxed max-w-sm ${
+                    stmtHeaderLayout === 'banner' ? 'text-white/85' : 'text-slate-600'
+                  }`}
+                >
                   {settings.address}
                 </p>
               )}
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-600 pt-0.5">
+              <div
+                className={`flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs pt-0.5 ${
+                  stmtHeaderLayout === 'centered' ? 'justify-center' : ''
+                } ${stmtHeaderLayout === 'banner' ? 'text-white/85' : 'text-slate-600'}`}
+              >
                 {settings?.phone && <span>Tel: {settings.phone}</span>}
                 {settings?.email && <span>Email: {settings.email}</span>}
               </div>
-              {settings?.trnNumber && (
-                <p className="text-xs font-bold text-slate-900 pt-0.5">
-                  TRN: {settings.trnNumber}
+              {(settings?.trnNumber || settings?.vatNumber) && (
+                <p
+                  className={`text-xs font-bold pt-0.5 ${
+                    stmtHeaderLayout === 'banner' ? 'text-white' : 'text-slate-900'
+                  }`}
+                >
+                  TRN: {settings.trnNumber || settings.vatNumber}
                 </p>
               )}
             </div>
           </div>
 
           {/* Statement Document Title & Metadata */}
-          <div className="sm:text-right space-y-1 w-full sm:w-auto">
-            <h1 className="text-xl sm:text-2xl font-black tracking-tight text-slate-900 uppercase">
-              {ledgerSource === 'expenses' ? 'EXPENSE STATEMENT' : 'STATEMENT OF ACCOUNT'}
+          <div
+            className={`space-y-1 w-full sm:w-auto ${
+              stmtHeaderLayout === 'centered'
+                ? 'text-center'
+                : stmtHeaderLayout === 'reversed'
+                ? 'sm:text-left'
+                : 'sm:text-right'
+            }`}
+          >
+            <h1
+              style={{
+                color: stmtHeaderLayout === 'banner' ? '#ffffff' : stmtAccentColor
+              }}
+              className="text-xl sm:text-2xl font-black tracking-tight uppercase"
+            >
+              {ledgerSource === 'expenses' ? 'EXPENSE STATEMENT' : stmtCustomTitle}
             </h1>
-            <div className="text-xs text-slate-600 space-y-0.5 pt-1">
+            <div
+              className={`text-xs space-y-0.5 pt-1 ${
+                stmtHeaderLayout === 'banner' ? 'text-white/90' : 'text-slate-600'
+              }`}
+            >
               <p>
-                <span className="font-semibold text-slate-500">Statement Date:</span>{' '}
-                <span className="font-bold text-slate-900">
+                <span
+                  className={`font-semibold ${
+                    stmtHeaderLayout === 'banner' ? 'text-white/75' : 'text-slate-500'
+                  }`}
+                >
+                  Statement Date:
+                </span>{' '}
+                <span
+                  className={`font-bold ${
+                    stmtHeaderLayout === 'banner' ? 'text-white' : 'text-slate-900'
+                  }`}
+                >
                   {formatDateMonthYear(new Date().toISOString().split('T')[0])}
                 </span>
               </p>
               <p>
-                <span className="font-semibold text-slate-500">Statement Period:</span>{' '}
-                <span className="font-bold text-slate-900">{periodLabel}</span>
+                <span
+                  className={`font-semibold ${
+                    stmtHeaderLayout === 'banner' ? 'text-white/75' : 'text-slate-500'
+                  }`}
+                >
+                  Statement Period:
+                </span>{' '}
+                <span
+                  className={`font-bold ${
+                    stmtHeaderLayout === 'banner' ? 'text-white' : 'text-slate-900'
+                  }`}
+                >
+                  {periodLabel}
+                </span>
               </p>
               <p>
-                <span className="font-semibold text-slate-500">Currency:</span>{' '}
-                <span className="font-bold text-slate-900">
+                <span
+                  className={`font-semibold ${
+                    stmtHeaderLayout === 'banner' ? 'text-white/75' : 'text-slate-500'
+                  }`}
+                >
+                  Currency:
+                </span>{' '}
+                <span
+                  className={`font-bold ${
+                    stmtHeaderLayout === 'banner' ? 'text-white' : 'text-slate-900'
+                  }`}
+                >
                   {currencyCode} ({currencySymbol})
                 </span>
               </p>
               {(statusFilter !== 'all' || selectedCategory !== 'ALL') && (
                 <p>
-                  <span className="font-semibold text-slate-500">Filter Scope:</span>{' '}
-                  <span className="font-bold text-slate-900 uppercase">
+                  <span
+                    className={`font-semibold ${
+                      stmtHeaderLayout === 'banner' ? 'text-white/75' : 'text-slate-500'
+                    }`}
+                  >
+                    Filter Scope:
+                  </span>{' '}
+                  <span
+                    className={`font-bold uppercase ${
+                      stmtHeaderLayout === 'banner' ? 'text-white' : 'text-slate-900'
+                    }`}
+                  >
                     {statusFilter !== 'all' ? `${statusFilter} Only` : 'All Statuses'}
                     {selectedCategory !== 'ALL' ? ` · ${selectedCategory}` : ''}
                   </span>
@@ -1087,7 +1258,11 @@ export const Statements: React.FC<StatementsProps> = ({
         {/* 2. ACCOUNT HOLDER (BILL TO) & STANDARD ACCOUNT SUMMARY BOX */}
         <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-stretch">
           {/* Left: Account Holder / Client Details */}
-          <div className="md:col-span-6 p-4 rounded-xl bg-slate-50 border border-slate-200 flex flex-col justify-between">
+          <div
+            className={`${
+              stmtShowSummaryBox ? 'md:col-span-6' : 'md:col-span-12'
+            } p-4 rounded-xl bg-slate-50 border border-slate-200 flex flex-col justify-between`}
+          >
             <div>
               <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">
                 Account Of (Client / Customer)
@@ -1128,41 +1303,58 @@ export const Statements: React.FC<StatementsProps> = ({
           </div>
 
           {/* Right: Standard Accounting Summary Box */}
-          <div className="md:col-span-6 rounded-xl border border-slate-900 overflow-hidden">
-            <div className="bg-slate-900 text-white px-4 py-2 text-xs font-bold uppercase tracking-wider flex items-center justify-between">
-              <span>Account Summary</span>
-              <span>Amount ({currencySymbol})</span>
+          {stmtShowSummaryBox && (
+            <div
+              style={{ borderColor: stmtAccentColor }}
+              className="md:col-span-6 rounded-xl border overflow-hidden"
+            >
+              <div
+                style={{ backgroundColor: stmtAccentColor }}
+                className="text-white px-4 py-2 text-xs font-bold uppercase tracking-wider flex items-center justify-between"
+              >
+                <span>Account Summary</span>
+                <span>Amount ({currencySymbol})</span>
+              </div>
+              <div className="divide-y divide-slate-200 text-xs">
+                <div className="px-4 py-2.5 flex items-center justify-between bg-white">
+                  <span className="font-semibold text-slate-600">
+                    {ledgerSource === 'expenses'
+                      ? 'Total Expenses Recorded'
+                      : 'Total Invoiced (Billed)'}
+                  </span>
+                  <span className="font-bold text-slate-900 tabular-nums">
+                    {currencySymbol} {formatAmount(summary.totalInvoiced)}
+                  </span>
+                </div>
+                <div className="px-4 py-2.5 flex items-center justify-between bg-white">
+                  <span className="font-semibold text-slate-600">
+                    {ledgerSource === 'expenses'
+                      ? 'Total Paid Out'
+                      : 'Less: Amount Received (Paid)'}
+                  </span>
+                  <span className="font-bold text-emerald-700 tabular-nums">
+                    {currencySymbol} {formatAmount(summary.totalPaid)}
+                  </span>
+                </div>
+                <div className="px-4 py-3 flex items-center justify-between bg-slate-50">
+                  <span className="font-black text-slate-900 uppercase">
+                    {ledgerSource === 'expenses'
+                      ? 'Net Expense Total'
+                      : 'Total Balance Due (Unpaid)'}
+                  </span>
+                  <span
+                    style={{ color: stmtAccentColor }}
+                    className="text-sm font-black tabular-nums"
+                  >
+                    {currencySymbol}{' '}
+                    {formatAmount(
+                      ledgerSource === 'expenses' ? summary.totalInvoiced : summary.totalBalance
+                    )}
+                  </span>
+                </div>
+              </div>
             </div>
-            <div className="divide-y divide-slate-200 text-xs">
-              <div className="px-4 py-2.5 flex items-center justify-between bg-white">
-                <span className="font-semibold text-slate-600">
-                  {ledgerSource === 'expenses' ? 'Total Expenses Recorded' : 'Total Invoiced (Billed)'}
-                </span>
-                <span className="font-bold text-slate-900 tabular-nums">
-                  {currencySymbol} {formatAmount(summary.totalInvoiced)}
-                </span>
-              </div>
-              <div className="px-4 py-2.5 flex items-center justify-between bg-white">
-                <span className="font-semibold text-slate-600">
-                  {ledgerSource === 'expenses' ? 'Total Paid Out' : 'Less: Amount Received (Paid)'}
-                </span>
-                <span className="font-bold text-emerald-700 tabular-nums">
-                  {currencySymbol} {formatAmount(summary.totalPaid)}
-                </span>
-              </div>
-              <div className="px-4 py-3 flex items-center justify-between bg-slate-50">
-                <span className="font-black text-slate-900 uppercase">
-                  {ledgerSource === 'expenses' ? 'Net Expense Total' : 'Total Balance Due (Unpaid)'}
-                </span>
-                <span className="text-sm font-black text-slate-900 tabular-nums">
-                  {currencySymbol}{' '}
-                  {formatAmount(
-                    ledgerSource === 'expenses' ? summary.totalInvoiced : summary.totalBalance
-                  )}
-                </span>
-              </div>
-            </div>
-          </div>
+          )}
         </div>
 
         {/* 3. STATEMENT TABLE — HEADING IS "INVOICE DATE" AND SHOWS FULL DATE MONTH YEAR */}
@@ -1171,7 +1363,18 @@ export const Statements: React.FC<StatementsProps> = ({
             <div className="overflow-x-auto border border-slate-300 rounded-lg">
               <table className="w-full text-left border-collapse">
                 <thead>
-                  <tr className="bg-slate-900 text-white text-[11px] font-bold uppercase tracking-wider">
+                  <tr
+                    style={
+                      stmtTableStyle === 'minimal'
+                        ? { borderBottomColor: stmtAccentColor }
+                        : { backgroundColor: stmtAccentColor, color: '#ffffff' }
+                    }
+                    className={`text-[11px] font-bold uppercase tracking-wider ${
+                      stmtTableStyle === 'minimal'
+                        ? 'border-b-2 text-slate-900 bg-slate-50'
+                        : 'text-white'
+                    }`}
+                  >
                     <th className="py-2.5 px-3 border-r border-slate-700 w-32">Invoice Date</th>
                     <th className="py-2.5 px-3 border-r border-slate-700 w-28">Invoice / Ref</th>
                     {selectedClientId === 'ALL' && (
@@ -1312,7 +1515,18 @@ export const Statements: React.FC<StatementsProps> = ({
           <div className="overflow-x-auto border border-slate-300 rounded-lg">
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="bg-slate-900 text-white text-[11px] font-bold uppercase tracking-wider">
+                <tr
+                  style={
+                    stmtTableStyle === 'minimal'
+                      ? { borderBottomColor: stmtAccentColor }
+                      : { backgroundColor: stmtAccentColor, color: '#ffffff' }
+                  }
+                  className={`text-[11px] font-bold uppercase tracking-wider ${
+                    stmtTableStyle === 'minimal'
+                      ? 'border-b-2 text-slate-900 bg-slate-50'
+                      : 'text-white'
+                  }`}
+                >
                   <th className="py-2.5 px-4 border-r border-slate-700 w-32">Invoice Date</th>
                   <th className="py-2.5 px-4 border-r border-slate-700 w-28">Invoice / Ref</th>
                   {selectedClientId === 'ALL' && (
@@ -1445,7 +1659,18 @@ export const Statements: React.FC<StatementsProps> = ({
           <div className="overflow-x-auto border border-slate-300 rounded-lg">
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="bg-slate-900 text-white text-[11px] font-bold uppercase tracking-wider">
+                <tr
+                  style={
+                    stmtTableStyle === 'minimal'
+                      ? { borderBottomColor: stmtAccentColor }
+                      : { backgroundColor: stmtAccentColor, color: '#ffffff' }
+                  }
+                  className={`text-[11px] font-bold uppercase tracking-wider ${
+                    stmtTableStyle === 'minimal'
+                      ? 'border-b-2 text-slate-900 bg-slate-50'
+                      : 'text-white'
+                  }`}
+                >
                   <th className="py-2.5 px-4 border-r border-slate-700 w-32">Invoice Date</th>
                   <th className="py-2.5 px-4 border-r border-slate-700">
                     Service / Expense Category
@@ -1524,29 +1749,34 @@ export const Statements: React.FC<StatementsProps> = ({
         {/* 4. STANDARD REMITTANCE INSTRUCTIONS & AUTO-APPLIED AUTHORIZED SIGNATURE + COMPANY SEAL FOOTER */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-8 pt-6 border-t border-slate-300 text-xs items-end">
           <div className="space-y-1">
-            <p className="font-bold uppercase text-slate-800">
-              Bank Remittance &amp; Payment Instructions
-            </p>
-            {settings?.bankName || settings?.bankAccount ? (
-              <div className="text-slate-600 space-y-0.5 leading-relaxed">
-                {settings?.bankName && (
-                  <p>
-                    <span className="font-semibold text-slate-700">Bank:</span> {settings.bankName}
+            {stmtShowRemittance && (
+              <>
+                <p className="font-bold uppercase text-slate-800">
+                  Bank Remittance &amp; Payment Instructions
+                </p>
+                {settings?.bankName || settings?.bankAccount ? (
+                  <div className="text-slate-600 space-y-0.5 leading-relaxed">
+                    {settings?.bankName && (
+                      <p>
+                        <span className="font-semibold text-slate-700">Bank:</span>{' '}
+                        {settings.bankName}
+                      </p>
+                    )}
+                    {settings?.bankAccount && (
+                      <p>
+                        <span className="font-semibold text-slate-700">Account / IBAN:</span>{' '}
+                        {settings.bankAccount}
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-slate-500">
+                    Please remit the balance due via Bank Transfer or Cheque payable to{' '}
+                    <strong className="text-slate-800">{settings?.name || 'our company'}</strong>{' '}
+                    and quote your Invoice Reference #.
                   </p>
                 )}
-                {settings?.bankAccount && (
-                  <p>
-                    <span className="font-semibold text-slate-700">Account / IBAN:</span>{' '}
-                    {settings.bankAccount}
-                  </p>
-                )}
-              </div>
-            ) : (
-              <p className="text-slate-500">
-                Please remit the balance due via Bank Transfer or Cheque payable to{' '}
-                <strong className="text-slate-800">{settings?.name || 'our company'}</strong> and
-                quote your Invoice Reference #.
-              </p>
+              </>
             )}
           </div>
 

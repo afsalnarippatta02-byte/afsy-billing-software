@@ -196,6 +196,45 @@ export interface CompanySettings {
   aiDraggable?: boolean;
   aiThemeColor?: 'indigo' | 'emerald' | 'violet' | 'slate' | 'amber';
   aiDefaultMode?: 'hybrid' | 'offline' | 'cloud';
+  // Invoice & Statement Format & Template Customization Settings
+  invoicePrefix?: string;
+  beneficiaryName?: string;
+  iban?: string;
+  invoiceTemplate?:
+    | 'executive_indigo'
+    | 'emirates_gold'
+    | 'dubai_minimal'
+    | 'corporate_navy'
+    | 'modern_emerald'
+    | 'classic_ledger'
+    | 'creative_agency'
+    | 'compact_commercial';
+  invoiceAccentColor?: string;
+  invoiceHeaderLayout?: 'split' | 'banner' | 'centered' | 'reversed';
+  invoiceTableStyle?: 'striped' | 'bordered' | 'minimal';
+  invoiceFontStyle?: 'sans' | 'serif' | 'mono';
+  invoiceCustomTitle?: string;
+  invoiceShowCategoryCol?: boolean;
+  invoiceShowBankDetails?: boolean;
+  invoiceCompactMode?: boolean;
+  statementTemplate?:
+    | 'standard_audit'
+    | 'executive_navy'
+    | 'emirates_gold_ledger'
+    | 'minimal_clean'
+    | 'emerald_financial'
+    | 'classic_boxed'
+    | 'corporate_teal'
+    | 'compact_statement';
+  statementAccentColor?: string;
+  statementHeaderLayout?: 'split' | 'banner' | 'centered' | 'reversed';
+  statementTableStyle?: 'striped' | 'bordered' | 'minimal';
+  statementCustomTitle?: string;
+  statementShowSummaryBox?: boolean;
+  statementShowRemittance?: boolean;
+  statementCompactMode?: boolean;
+  statementDefaultView?: 'date_wise' | 'month_wise' | 'category_wise';
+  statementDefaultOrientation?: 'portrait' | 'landscape';
 }
 
 export type View = 'dashboard' | 'invoices' | 'clients' | 'statements' | 'expenses' | 'staff' | 'ai-helper' | 'settings';

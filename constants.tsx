@@ -61,8 +61,214 @@ export const INITIAL_SETTINGS: CompanySettings = {
   aiCustomPosition: null,
   aiDraggable: true,
   aiThemeColor: 'indigo',
-  aiDefaultMode: 'hybrid'
+  aiDefaultMode: 'hybrid',
+  invoicePrefix: 'INV-',
+  invoiceTemplate: 'executive_indigo',
+  invoiceAccentColor: '#4f46e5',
+  invoiceHeaderLayout: 'split',
+  invoiceTableStyle: 'striped',
+  invoiceFontStyle: 'sans',
+  invoiceCustomTitle: 'TAX INVOICE',
+  invoiceShowCategoryCol: true,
+  invoiceShowBankDetails: true,
+  invoiceCompactMode: false,
+  statementTemplate: 'standard_audit',
+  statementAccentColor: '#0f172a',
+  statementHeaderLayout: 'split',
+  statementTableStyle: 'striped',
+  statementCustomTitle: 'STATEMENT OF ACCOUNT',
+  statementShowSummaryBox: true,
+  statementShowRemittance: true,
+  statementCompactMode: false,
+  statementDefaultView: 'date_wise',
+  statementDefaultOrientation: 'portrait'
 };
+
+export interface DocumentTemplatePreset {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  accentColor: string;
+  headerLayout: 'split' | 'banner' | 'centered' | 'reversed';
+  tableStyle: 'striped' | 'bordered' | 'minimal';
+  fontStyle?: 'sans' | 'serif' | 'mono';
+  compactMode?: boolean;
+}
+
+export const INVOICE_TEMPLATE_PRESETS: DocumentTemplatePreset[] = [
+  {
+    id: 'executive_indigo',
+    name: 'Executive Corporate',
+    category: 'UAE Standard',
+    description: 'Clean top accent bar, left corporate branding, high-contrast date badges, and structured totals.',
+    accentColor: '#4f46e5',
+    headerLayout: 'split',
+    tableStyle: 'striped',
+    fontStyle: 'sans',
+    compactMode: false
+  },
+  {
+    id: 'emirates_gold',
+    name: 'Emirates Royal Gold',
+    category: 'Prestige Gold',
+    description: 'Warm gold header rules, formal TRN tax box, luxury editorial typography, and gold-accented table.',
+    accentColor: '#b45309',
+    headerLayout: 'split',
+    tableStyle: 'bordered',
+    fontStyle: 'serif',
+    compactMode: false
+  },
+  {
+    id: 'corporate_navy',
+    name: 'Dark Navy Banner',
+    category: 'Enterprise',
+    description: 'Full-width deep navy header banner with white typography and crisp corporate grid lines.',
+    accentColor: '#0f172a',
+    headerLayout: 'banner',
+    tableStyle: 'bordered',
+    fontStyle: 'sans',
+    compactMode: false
+  },
+  {
+    id: 'dubai_minimal',
+    name: 'Minimalist Swiss Studio',
+    category: 'Editorial Clean',
+    description: 'Ultra-clean monochrome layout with hairline dividers, unboxed metadata, and airy spacing.',
+    accentColor: '#1e293b',
+    headerLayout: 'split',
+    tableStyle: 'minimal',
+    fontStyle: 'sans',
+    compactMode: false
+  },
+  {
+    id: 'modern_emerald',
+    name: 'Modern Emerald Split',
+    category: 'Financial Green',
+    description: 'Contemporary emerald header accents, tinted client card, and highlighted settlement totals.',
+    accentColor: '#047857',
+    headerLayout: 'reversed',
+    tableStyle: 'striped',
+    fontStyle: 'sans',
+    compactMode: false
+  },
+  {
+    id: 'classic_ledger',
+    name: 'Traditional Framed Ledger',
+    category: 'Accounting Grid',
+    description: 'Centered formal letterhead with full 4-sided accounting table borders and classic audit layout.',
+    accentColor: '#334155',
+    headerLayout: 'centered',
+    tableStyle: 'bordered',
+    fontStyle: 'serif',
+    compactMode: false
+  },
+  {
+    id: 'creative_agency',
+    name: 'Creative Production Bold',
+    category: 'Media & Studio',
+    description: 'Vibrant violet studio banner designed for creative agencies, production houses, and campaigns.',
+    accentColor: '#7c3aed',
+    headerLayout: 'banner',
+    tableStyle: 'striped',
+    fontStyle: 'sans',
+    compactMode: false
+  },
+  {
+    id: 'compact_commercial',
+    name: 'Compact Commercial Tax',
+    category: 'High Density',
+    description: 'Space-optimized commercial tax layout engineered to fit 20+ line items cleanly on one A4 page.',
+    accentColor: '#0f766e',
+    headerLayout: 'split',
+    tableStyle: 'bordered',
+    fontStyle: 'mono',
+    compactMode: true
+  }
+];
+
+export const STATEMENT_TEMPLATE_PRESETS: DocumentTemplatePreset[] = [
+  {
+    id: 'standard_audit',
+    name: 'Standard Accounting Audit',
+    category: 'Official Ledger',
+    description: 'Classic black corporate rule, side-by-side Account Holder & Summary box, and dark ledger header.',
+    accentColor: '#0f172a',
+    headerLayout: 'split',
+    tableStyle: 'striped',
+    compactMode: false
+  },
+  {
+    id: 'executive_navy',
+    name: 'Executive Navy Banner',
+    category: 'Corporate Banner',
+    description: 'Full-width deep indigo-navy header banner with white typography and structured summary cards.',
+    accentColor: '#1e3a8a',
+    headerLayout: 'banner',
+    tableStyle: 'striped',
+    compactMode: false
+  },
+  {
+    id: 'emirates_gold_ledger',
+    name: 'UAE Royal Gold Statement',
+    category: 'Prestige Gold',
+    description: 'Warm gold-accented statement of account with formal bordered ledger cells and executive summary.',
+    accentColor: '#b45309',
+    headerLayout: 'split',
+    tableStyle: 'bordered',
+    compactMode: false
+  },
+  {
+    id: 'minimal_clean',
+    name: 'Minimalist Unboxed Ledger',
+    category: 'Clean Editorial',
+    description: 'Modern unboxed typography with subtle horizontal hairlines and distraction-free financial figures.',
+    accentColor: '#334155',
+    headerLayout: 'split',
+    tableStyle: 'minimal',
+    compactMode: false
+  },
+  {
+    id: 'emerald_financial',
+    name: 'Emerald Banking Statement',
+    category: 'Banking Style',
+    description: 'Financial institution style with emerald header band, clear debit/credit columns, and balance box.',
+    accentColor: '#047857',
+    headerLayout: 'banner',
+    tableStyle: 'striped',
+    compactMode: false
+  },
+  {
+    id: 'classic_boxed',
+    name: 'Classic Boxed Audit Grid',
+    category: 'Full Grid',
+    description: 'Centered corporate header with complete vertical & horizontal grid lines for formal audit review.',
+    accentColor: '#1e293b',
+    headerLayout: 'centered',
+    tableStyle: 'bordered',
+    compactMode: false
+  },
+  {
+    id: 'corporate_teal',
+    name: 'Corporate Teal Ledger',
+    category: 'Modern Reversed',
+    description: 'Right-aligned brand emblem with ocean-teal table headers and clean alternating transaction rows.',
+    accentColor: '#0f766e',
+    headerLayout: 'reversed',
+    tableStyle: 'striped',
+    compactMode: false
+  },
+  {
+    id: 'compact_statement',
+    name: 'High-Density Compact Ledger',
+    category: 'Multi-Row',
+    description: 'Tight row spacing and compact tabular numerals to fit maximum monthly invoices per A4 sheet.',
+    accentColor: '#4f46e5',
+    headerLayout: 'split',
+    tableStyle: 'bordered',
+    compactMode: true
+  }
+];
 
 export const CURRENCIES = [
   { code: 'AED', symbol: '\u20C3', name: 'UAE Dirham / DH (AED - \u20C3)' },

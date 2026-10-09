@@ -44,7 +44,9 @@ export const SignatureSealSettingsSection: React.FC<SignatureSealSettingsSection
   const autoApplySeal = formData.autoApplySeal ?? false;
 
   const notify = (msg: string, type: 'success' | 'error' = 'success') => {
-    if (onSaveToast) onSaveToast(msg, type);
+    if (type === 'error' && onSaveToast) {
+      onSaveToast(msg, type);
+    }
   };
 
   // Handle Signature Upload (with automatic background removal option)
