@@ -90,12 +90,6 @@ const App: React.FC = () => {
     if (savedUser) {
       try {
         const parsed = JSON.parse(savedUser);
-        if (parsed?.email && parsed.email.toLowerCase().includes('afsalnarippatta')) {
-          parsed.email = '';
-        }
-        if (parsed?.name && parsed.name.toLowerCase().includes('afsal')) {
-          parsed.name = 'Administrator';
-        }
         return parsed;
       } catch (e) {
         console.error(e);
@@ -148,12 +142,7 @@ const App: React.FC = () => {
   // Multi-Device Email & Google Drive Sync Modal State
   const [showSyncModal, setShowSyncModal] = useState(false);
   const [syncEmailInput, setSyncEmailInput] = useState<string>(() => {
-    const linked = getLinkedDriveAccount() || '';
-    if (linked.toLowerCase().includes('afsalnarippatta')) {
-      localStorage.removeItem('af_drive_linked_account');
-      return '';
-    }
-    return linked;
+    return getLinkedDriveAccount() || '';
   });
   const [syncStatusMsg, setSyncStatusMsg] = useState<string>('');
   const [isPullingCloud, setIsPullingCloud] = useState<boolean>(false);
@@ -201,12 +190,6 @@ const App: React.FC = () => {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (parsed.email && parsed.email.toLowerCase().includes('afsalnarippatta')) {
-          parsed.email = '';
-        }
-        if (parsed.driveSyncEmail && parsed.driveSyncEmail.toLowerCase().includes('afsalnarippatta')) {
-          parsed.driveSyncEmail = '';
-        }
         return {
           ...INITIAL_SETTINGS,
           ...parsed,

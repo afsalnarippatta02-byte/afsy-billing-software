@@ -1508,8 +1508,8 @@ export const TRANSLATIONS: Record<LanguageCode, Record<string, string>> = {
   },
 };
 
-export const getTranslation = (lang: LanguageCode, key: string, fallback?: string): string => {
-  const currentDict = TRANSLATIONS[lang] || TRANSLATIONS.en;
+export const getTranslation = (lang: LanguageCode | string, key: string, fallback?: string): string => {
+  const currentDict = TRANSLATIONS[lang as LanguageCode] || TRANSLATIONS.en;
   if (currentDict[key]) {
     return currentDict[key];
   }

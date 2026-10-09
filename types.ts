@@ -46,6 +46,10 @@ export interface StaffPermissions {
   canViewStatements: boolean;
   canUseAI: boolean;
   canAccessSettings: boolean;
+  canCreateInvoices?: boolean;
+  canLogExpenses?: boolean;
+  canViewStaff?: boolean;
+  canUseGemini?: boolean;
 }
 
 export interface UserAccount {

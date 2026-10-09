@@ -71,6 +71,9 @@ export const UserManagementSettings: React.FC<UserManagementSettingsProps> = ({
   const [adminAuthPassword, setAdminAuthPassword] = useState('');
   const [showAdminAuthPass, setShowAdminAuthPass] = useState(false);
   const [modalError, setModalError] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; username: string } | null>(null);
+  const [deleteAdminPass, setDeleteAdminPass] = useState('');
+  const [deleteError, setDeleteError] = useState('');
 
   // Primary 1st Admin in the system
   const primaryAdmin = safeUsers.find(u => u.role === UserRole.ADMIN);
@@ -155,11 +158,14 @@ export const UserManagementSettings: React.FC<UserManagementSettingsProps> = ({
       setEditingUserId(userToEdit.id);
       setStaffUsername(userToEdit.username);
       setStaffName(userToEdit.name || userToEdit.username);
-      setStaffPassword(userToEdit.password);
+      setStaffPassword(userToEdit.password || '');
       setStaffEmail(userToEdit.email || '');
       setStaffPhone(userToEdit.phone || '');
       setStaffRole(userToEdit.role);
-      setStaffPermissions(userToEdit.permissions || DEFAULT_STAFF_PERMISSIONS);
+      setStaffPermissions({
+        ...DEFAULT_STAFF_PERMISSIONS,
+        ...userToEdit.permissions,
+      });
     } else {
       setEditingUserId(null);
       setStaffUsername('');
@@ -261,25 +267,31 @@ export const UserManagementSettings: React.FC<UserManagementSettingsProps> = ({
   // Delete staff user
   const handleDeleteUser = (userId: string, username: string) => {
     if (userId === currentUser.id) {
-      alert('You cannot delete your own currently active logged-in account.');
+      setProfileFeedback({ type: 'error', message: 'You cannot delete your own currently active logged-in account.' });
       return;
     }
+    setDeleteTarget({ id: userId, username });
+    setDeleteAdminPass('');
+    setDeleteError('');
+  };
+
+  const confirmDeleteUser = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!deleteTarget) return;
 
     if (primaryAdmin && primaryAdmin.password) {
-      const enteredPassword = window.prompt(`Security Verification Required:\nEnter the 1st Main Admin password to delete user "${username}":`);
-      if (enteredPassword === null) return;
-      if (enteredPassword !== primaryAdmin.password) {
-        alert('Authentication failed: 1st Main Admin password is incorrect.');
-        return;
-      }
-    } else {
-      if (!confirm(`Are you sure you want to permanently delete user "${username}"?`)) {
+      if (deleteAdminPass !== primaryAdmin.password) {
+        setDeleteError('Authentication failed: 1st Main Admin password is incorrect.');
         return;
       }
     }
 
-    const updated = safeUsers.filter(u => u.id !== userId);
+    const updated = safeUsers.filter(u => u.id !== deleteTarget.id);
     onUpdateUsers(updated);
+    setDeleteTarget(null);
+    setDeleteAdminPass('');
+    setDeleteError('');
+    setProfileFeedback({ type: 'success', message: `User "${deleteTarget.username}" deleted successfully.` });
     if (currentUser.email) {
       syncToGoogleDriveCloud(currentUser.email).catch(() => {});
     }
@@ -287,10 +299,26 @@ export const UserManagementSettings: React.FC<UserManagementSettingsProps> = ({
 
   // Toggle permission checkbox
   const handleTogglePermission = (key: keyof StaffPermissions) => {
-    setStaffPermissions(prev => ({
-      ...prev,
-      [key]: !prev[key]
-    }));
+    setStaffPermissions(prev => {
+      const nextVal = !prev[key];
+      const nextState: StaffPermissions = {
+        ...prev,
+        [key]: nextVal,
+      };
+      if (key === 'canCreateInvoices' || key === 'canManageInvoices') {
+        nextState.canCreateInvoices = nextVal;
+        nextState.canManageInvoices = nextVal;
+      }
+      if (key === 'canLogExpenses' || key === 'canManageExpenses') {
+        nextState.canLogExpenses = nextVal;
+        nextState.canManageExpenses = nextVal;
+      }
+      if (key === 'canUseGemini' || key === 'canUseAI') {
+        nextState.canUseGemini = nextVal;
+        nextState.canUseAI = nextVal;
+      }
+      return nextState;
+    });
   };
 
   const isAdmin = currentUser.role === UserRole.ADMIN;
@@ -841,6 +869,74 @@ export const UserManagementSettings: React.FC<UserManagementSettingsProps> = ({
                   className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs shadow-md shadow-indigo-100 dark:shadow-none transition-all active:scale-95"
                 >
                   {editingUserId ? 'Save User Changes' : 'Create User Account'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: CONFIRM DELETE USER                                                */}
+      {/* ========================================================================= */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+              <h3 className="text-base font-black text-slate-900 dark:text-white flex items-center gap-2">
+                <Trash2 size={18} className="text-rose-600" />
+                Delete User Account
+              </h3>
+              <button
+                type="button"
+                onClick={() => setDeleteTarget(null)}
+                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-white"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {deleteError && (
+              <div className="p-3 bg-rose-50 dark:bg-rose-950 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs font-bold rounded-xl flex items-center gap-2">
+                <AlertCircle size={15} />
+                <span>{deleteError}</span>
+              </div>
+            )}
+
+            <form onSubmit={confirmDeleteUser} className="space-y-4">
+              <p className="text-xs text-slate-600 dark:text-slate-300">
+                Are you sure you want to permanently delete user <strong className="text-slate-900 dark:text-white">@{deleteTarget.username}</strong>?
+              </p>
+
+              {primaryAdmin && primaryAdmin.password && (
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                    Enter 1st Main Admin Password ({primaryAdmin.username}) to Confirm
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    value={deleteAdminPass}
+                    onChange={e => setDeleteAdminPass(e.target.value)}
+                    placeholder="Admin password"
+                    className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-rose-500"
+                  />
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setDeleteTarget(null)}
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black shadow-md"
+                >
+                  Confirm Delete
                 </button>
               </div>
             </form>

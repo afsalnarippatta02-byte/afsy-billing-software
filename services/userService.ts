@@ -7,6 +7,10 @@ export const DEFAULT_ADMIN_PERMISSIONS: StaffPermissions = {
   canViewStatements: true,
   canUseAI: true,
   canAccessSettings: true,
+  canCreateInvoices: true,
+  canLogExpenses: true,
+  canViewStaff: true,
+  canUseGemini: true,
 };
 
 export const DEFAULT_STAFF_PERMISSIONS: StaffPermissions = {
@@ -16,6 +20,10 @@ export const DEFAULT_STAFF_PERMISSIONS: StaffPermissions = {
   canViewStatements: false,
   canUseAI: true,
   canAccessSettings: false,
+  canCreateInvoices: true,
+  canLogExpenses: true,
+  canViewStaff: false,
+  canUseGemini: true,
 };
 
 export const INITIAL_USERS: UserAccount[] = [
@@ -38,11 +46,7 @@ export const loadStoredUsers = (): UserAccount[] => {
     try {
       const parsed = JSON.parse(saved);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed.map((u: UserAccount) => ({
-          ...u,
-          name: u.name && u.name.toLowerCase().includes('afsal') ? 'Administrator' : u.name,
-          email: u.email && u.email.toLowerCase().includes('afsalnarippatta') ? '' : u.email
-        }));
+        return parsed;
       }
     } catch (e) {
       console.error('Failed to parse users', e);

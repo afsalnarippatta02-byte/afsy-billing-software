@@ -431,7 +431,8 @@ export const Settings: React.FC<SettingsProps> = ({
 
   const processImageFile = (file: File) => {
     if (!file.type.startsWith('image/')) {
-      alert('Please upload a valid image file (PNG, JPG, SVG, WebP, GIF).');
+      setSaveToast({ show: true, msg: 'Please upload a valid image file (PNG, JPG, SVG, WebP, GIF).', type: 'error' });
+      setTimeout(() => setSaveToast({ show: false }), 4000);
       return;
     }
 
@@ -449,7 +450,8 @@ export const Settings: React.FC<SettingsProps> = ({
       };
       reader.onerror = () => {
         setIsProcessingImage(false);
-        alert('Failed to read image file.');
+        setSaveToast({ show: true, msg: 'Failed to read image file.', type: 'error' });
+        setTimeout(() => setSaveToast({ show: false }), 4000);
       };
       reader.readAsDataURL(file);
       return;
@@ -569,7 +571,8 @@ export const Settings: React.FC<SettingsProps> = ({
     if (e) e.preventDefault();
     
     if (!formData.name.trim()) {
-      alert('Please enter a valid Company Name.');
+      setSaveToast({ show: true, msg: 'Please enter a valid Company Name.', type: 'error' });
+      setTimeout(() => setSaveToast({ show: false }), 4000);
       return;
     }
 
@@ -604,7 +607,8 @@ export const Settings: React.FC<SettingsProps> = ({
   const handleTriggerCloudSync = async () => {
     const syncEmail = formData.driveSyncEmail || currentUser?.email;
     if (!syncEmail) {
-      alert('Please enter your Google Drive Email first to link cloud synchronization.');
+      setSaveToast({ show: true, msg: 'Please enter your Google Drive Email first to link cloud synchronization.', type: 'error' });
+      setTimeout(() => setSaveToast({ show: false }), 4000);
       return;
     }
 
@@ -717,7 +721,7 @@ export const Settings: React.FC<SettingsProps> = ({
         }
         setSaveToast({ show: true, msg: `Successfully imported ${imported.length} clients from CSV!`, type: 'success' });
       } else {
-        alert('No valid client records found in CSV file.');
+        setSaveToast({ show: true, msg: 'No valid client records found in CSV file.', type: 'error' });
       }
       setTimeout(() => setSaveToast({ show: false }), 4000);
     };
@@ -741,7 +745,7 @@ export const Settings: React.FC<SettingsProps> = ({
         }
         setSaveToast({ show: true, msg: `Successfully imported ${imported.length} expenses from CSV!`, type: 'success' });
       } else {
-        alert('No valid expense records found in CSV file.');
+        setSaveToast({ show: true, msg: 'No valid expense records found in CSV file.', type: 'error' });
       }
       setTimeout(() => setSaveToast({ show: false }), 4000);
     };

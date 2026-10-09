@@ -85,12 +85,12 @@ function loadLinkedProfileMetadata(): GoogleDriveUser | null {
     const raw = localStorage.getItem(LINKED_DRIVE_PROFILE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (parsed?.email && !parsed.email.toLowerCase().includes('afsalnarippatta')) {
+      if (parsed?.email) {
         return parsed;
       }
     }
     const fallbackEmail = localStorage.getItem(LINKED_DRIVE_EMAIL_KEY);
-    if (fallbackEmail && !fallbackEmail.toLowerCase().includes('afsalnarippatta')) {
+    if (fallbackEmail) {
       const clean = fallbackEmail.toLowerCase().trim();
       return {
         uid: `email_${clean}`,
