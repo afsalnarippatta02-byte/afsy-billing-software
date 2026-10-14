@@ -1438,8 +1438,16 @@ export const printElementDirectly = (elementId: string, title?: string): Promise
       // Clone content and remove any elements marked with .no-print
       const clone = element.cloneNode(true) as HTMLElement;
       clone.querySelectorAll('.no-print').forEach((el) => el.remove());
-      clone.querySelectorAll('.hidden.print\\:block, [class*="print:block"]').forEach((el) => {
-        (el as HTMLElement).style.display = 'block';
+      clone.querySelectorAll('.hidden.print\\:block, [class*="print:"], .print-visible, .pdf-print-visible').forEach((el) => {
+        const htmlEl = el as HTMLElement;
+        htmlEl.classList.remove('hidden');
+        if (htmlEl.classList.contains('print:inline') || htmlEl.classList.contains('inline')) {
+          htmlEl.style.display = 'inline';
+        } else if (htmlEl.classList.contains('print:flex') || htmlEl.classList.contains('flex')) {
+          htmlEl.style.display = 'flex';
+        } else {
+          htmlEl.style.display = 'block';
+        }
       });
 
       iframeDoc.open();
@@ -1530,18 +1538,43 @@ export const downloadElementAsPdf = async (
       backgroundColor: '#ffffff',
       windowWidth: 1200,
       onclone: (clonedDoc, clonedElement) => {
-        // 1. Hide interactive non-printable elements
+        // 1. Copy all head styles and stylesheets into clonedDoc so styling matches exactly
+        document.querySelectorAll('style, link[rel="stylesheet"]').forEach((s) => {
+          clonedDoc.head.appendChild(s.cloneNode(true));
+        });
+
+        // 2. Make all print fallback elements visible (supporting print:inline, print:block, print:flex, etc.)
+        clonedElement.querySelectorAll('.hidden.print\\:block, [class*="print:"], .print-visible, .pdf-print-visible, .item-description-print, .item-qty-print, .item-rate-print, .notes-print').forEach((el) => {
+          const htmlEl = el as HTMLElement;
+          htmlEl.classList.remove('hidden');
+          if (htmlEl.classList.contains('print:inline') || htmlEl.classList.contains('inline')) {
+            htmlEl.style.display = 'inline';
+          } else if (htmlEl.classList.contains('print:flex') || htmlEl.classList.contains('flex')) {
+            htmlEl.style.display = 'flex';
+          } else {
+            htmlEl.style.display = 'block';
+          }
+        });
+
+        // 3. Guarantee Date, Due Date, and TRN badge contrast and visibility
+        clonedElement.querySelectorAll('.date-badge-black, [data-date-badge]').forEach((el) => {
+          const htmlEl = el as HTMLElement;
+          htmlEl.style.backgroundColor = '#0f172a';
+          htmlEl.style.color = '#ffffff';
+          htmlEl.style.display = 'flex';
+          htmlEl.style.alignItems = 'center';
+          htmlEl.style.justifyContent = 'center';
+          htmlEl.style.borderRadius = '8px';
+          htmlEl.style.padding = '6px 12px';
+          htmlEl.style.minHeight = '36px';
+        });
+
+        // 4. Remove interactive non-printable elements completely
         clonedElement.querySelectorAll('.no-print').forEach((el) => {
-          (el as HTMLElement).style.display = 'none';
+          (el as HTMLElement).remove();
         });
 
-        // 2. Make all print fallback elements visible
-        clonedElement.querySelectorAll('.hidden.print\\:block, [class*="print:block"], .print-visible, .item-description-print, .item-qty-print, .item-rate-print, .notes-print').forEach((el) => {
-          (el as HTMLElement).style.display = 'block';
-          (el as HTMLElement).classList.remove('hidden');
-        });
-
-        // 3. Convert any inputs to visible rendered text
+        // 5. Convert any remaining inputs to visible rendered text
         clonedElement.querySelectorAll('input').forEach((input) => {
           if (input.type === 'button' || input.type === 'submit') return;
           if (input.parentElement?.querySelector('.print\\:block, .item-description-print, .item-qty-print, .item-rate-print')) {
@@ -1550,13 +1583,13 @@ export const downloadElementAsPdf = async (
           }
           const span = clonedDoc.createElement('span');
           span.textContent = input.value || '';
-          span.className = input.className.replace('no-print', '').replace('bg-slate-100', 'bg-transparent');
+          span.className = input.className.replace('bg-slate-100', 'bg-transparent');
           input.parentNode?.replaceChild(span, input);
         });
 
-        // 4. Convert textareas to pre-lined text blocks
+        // 6. Convert textareas to pre-lined text blocks
         clonedElement.querySelectorAll('textarea').forEach((ta) => {
-          if (ta.parentElement?.querySelector('.print\\:block, .notes-print')) {
+          if (ta.parentElement?.querySelector('.print\\:block, .notes-print, .pdf-print-visible')) {
             return;
           }
           const div = clonedDoc.createElement('div');
@@ -1566,7 +1599,7 @@ export const downloadElementAsPdf = async (
           ta.parentNode?.replaceChild(div, ta);
         });
 
-        // 5. Convert select dropdowns to selected text
+        // 7. Convert select dropdowns to selected text
         clonedElement.querySelectorAll('select').forEach((sel) => {
           if (sel.parentElement?.querySelector('.print\\:block')) {
             return;

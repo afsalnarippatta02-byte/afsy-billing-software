@@ -16,6 +16,8 @@ import {
 export interface AppBackupPayload {
   version: string;
   exportedAt: string;
+  lastSyncTime?: string;
+  updatedAtMs?: number;
   userEmail?: string;
   invoices: Invoice[];
   clients: Client[];
@@ -454,19 +456,66 @@ export const gatherAppBackupPayload = (userEmail?: string): AppBackupPayload => 
  */
 export const syncToGoogleDriveCloud = async (
   email: string,
-  payload?: AppBackupPayload
-): Promise<{ success: boolean; timestamp: string; invoiceCount: number; message: string }> => {
+  payload?: AppBackupPayload,
+  mode: 'replace' | 'merge' | 'link' = 'replace'
+): Promise<{
+  success: boolean;
+  timestamp: string;
+  updatedAtMs: number;
+  invoiceCount: number;
+  data?: AppBackupPayload;
+  message: string;
+}> => {
   const cleanEmail = (email || '').toLowerCase().trim();
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
   const data = payload || gatherAppBackupPayload(cleanEmail);
   data.userEmail = cleanEmail;
-  data.exportedAt = new Date().toISOString();
+  data.exportedAt = nowIso;
+  data.lastSyncTime = nowIso;
+  data.updatedAtMs = nowMs;
+  if (data.settings) {
+    data.settings = {
+      ...data.settings,
+      driveSyncEmail: cleanEmail,
+      autoDriveSync: true,
+    };
+  }
 
-  // 1. Save to local device storage keyed by email (for 100% offline availability)
+  let serverData: AppBackupPayload = data;
+  let serverUpdatedAtMs = nowMs;
+
+  // 1. Sync to Multi-Device Server Email Cloud Vault (/api/sync) so PC & Mobile with same Email ID share all data
+  try {
+    if (typeof navigator === 'undefined' || navigator.onLine) {
+      const res = await fetch('/api/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: cleanEmail,
+          payload: data,
+          mode,
+        }),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.data) {
+          serverData = json.data;
+          serverUpdatedAtMs = json.updatedAtMs || nowMs;
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('Multi-device server vault sync warning (offline mode active):', e);
+  }
+
+  // 2. Save to local device storage keyed by email (for 100% offline availability)
   try {
     const existingBackups = JSON.parse(localStorage.getItem(DRIVE_BACKUPS_STORAGE_KEY) || '{}');
     existingBackups[cleanEmail] = {
-      ...data,
-      lastSyncTime: data.exportedAt
+      ...serverData,
+      lastSyncTime: serverData.lastSyncTime || nowIso,
+      updatedAtMs: serverUpdatedAtMs,
     };
     localStorage.setItem(DRIVE_BACKUPS_STORAGE_KEY, JSON.stringify(existingBackups));
     setLinkedDriveAccount(cleanEmail);
@@ -474,36 +523,19 @@ export const syncToGoogleDriveCloud = async (
     console.warn('Local storage backup warning:', e);
   }
 
-  // 2. Sync to Multi-Device Server Email Cloud Vault (/api/sync) so PC & Mobile with same Email ID share all data
-  try {
-    if (typeof navigator === 'undefined' || navigator.onLine) {
-      await fetch('/api/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: cleanEmail,
-          payload: data,
-          mode: 'merge'
-        })
-      });
-    }
-  } catch (e) {
-    console.warn('Multi-device server vault sync warning (offline mode active):', e);
-  }
-
   // 3. If Google Drive OAuth token is active in memory, update or create the master file on Google Drive
   try {
     const masterFileName = `AfAccounts_Master_Sync_${cleanEmail.replace(/[^a-z0-9]/gi, '_')}.json`;
-    const jsonStr = JSON.stringify(data, null, 2);
+    const jsonStr = JSON.stringify(serverData, null, 2);
     let masterMeta: GoogleDriveFile = {
       id: `drv_master_${cleanEmail.replace(/[^a-z0-9]/gi, '_')}`,
       name: masterFileName,
       mimeType: 'application/json',
-      createdTime: data.exportedAt,
-      modifiedTime: data.exportedAt,
+      createdTime: serverData.exportedAt || nowIso,
+      modifiedTime: serverData.exportedAt || nowIso,
       size: String(new Blob([jsonStr]).size),
-      invoiceCount: data.invoices.length,
-      clientCount: data.clients.length,
+      invoiceCount: serverData.invoices?.length || 0,
+      clientCount: serverData.clients?.length || 0,
       isMasterMirror: true,
       source: 'cloud-vault',
     };
@@ -519,7 +551,7 @@ export const syncToGoogleDriveCloud = async (
       masterMeta.isMasterMirror = true;
     }
 
-    saveLocalDriveFileRecord(cleanEmail, masterMeta, data);
+    saveLocalDriveFileRecord(cleanEmail, masterMeta, serverData);
   } catch (e) {
     console.warn('Google Drive background master sync warning:', e);
   }
@@ -528,7 +560,13 @@ export const syncToGoogleDriveCloud = async (
   try {
     if (typeof BroadcastChannel !== 'undefined') {
       const bc = new BroadcastChannel('af_accounts_sync_channel');
-      bc.postMessage({ type: 'DATA_SYNCED', email: cleanEmail, timestamp: data.exportedAt });
+      bc.postMessage({
+        type: 'DATA_SYNCED',
+        email: cleanEmail,
+        updatedAtMs: serverUpdatedAtMs,
+        timestamp: serverData.exportedAt || nowIso,
+        data: serverData,
+      });
       bc.close();
     }
   } catch {
@@ -537,19 +575,26 @@ export const syncToGoogleDriveCloud = async (
 
   return {
     success: true,
-    timestamp: data.exportedAt,
-    invoiceCount: data.invoices.length,
-    message: `Synchronized ${data.invoices.length} invoices, ${data.clients.length} clients, and expenses across all PC & Mobile devices linked to ${cleanEmail}.`
+    timestamp: serverData.exportedAt || nowIso,
+    updatedAtMs: serverUpdatedAtMs,
+    invoiceCount: serverData.invoices?.length || 0,
+    data: serverData,
+    message: `Synchronized ${serverData.invoices?.length || 0} invoices, ${serverData.clients?.length || 0} clients, and expenses across all PC & Mobile devices linked to ${cleanEmail}.`,
   };
 };
 
 /**
- * Pull and merge data associated with an Email ID from Google Drive + Multi-Device Server Cloud Vault + Local Vault
+ * Pull and apply data associated with an Email ID from Google Drive + Multi-Device Server Cloud Vault + Local Vault
  */
 export const pullFromCloudAndDriveByEmail = async (
   email: string,
-  mode: 'merge' | 'replace' = 'merge'
-): Promise<{ success: boolean; data?: AppBackupPayload; message: string }> => {
+  mode: 'merge' | 'replace' = 'replace'
+): Promise<{
+  success: boolean;
+  updatedAtMs?: number;
+  data?: AppBackupPayload;
+  message: string;
+}> => {
   const cleanEmail = (email || '').toLowerCase().trim();
   if (!cleanEmail) {
     return { success: false, message: 'Please enter a valid email address.' };
@@ -557,7 +602,33 @@ export const pullFromCloudAndDriveByEmail = async (
 
   setLinkedDriveAccount(cleanEmail);
 
-  // 1. Check Google Drive Master File first if OAuth token is active
+  // 1. Check Multi-Device Server Email Cloud Vault (/api/sync/:email) first for lowest latency & latest timestamp
+  try {
+    if (typeof navigator === 'undefined' || navigator.onLine) {
+      const res = await fetch(`/api/sync/${encodeURIComponent(cleanEmail)}`);
+      if (res.ok) {
+        const result = await res.json();
+        if (result.success && result.data) {
+          applyBackupPayload(result.data, mode);
+          const existingBackups = JSON.parse(localStorage.getItem(DRIVE_BACKUPS_STORAGE_KEY) || '{}');
+          existingBackups[cleanEmail] = result.data;
+          localStorage.setItem(DRIVE_BACKUPS_STORAGE_KEY, JSON.stringify(existingBackups));
+          const updatedLocal = gatherAppBackupPayload(cleanEmail);
+          updatedLocal.updatedAtMs = result.updatedAtMs || result.data.updatedAtMs || Date.now();
+          return {
+            success: true,
+            updatedAtMs: updatedLocal.updatedAtMs,
+            data: updatedLocal,
+            message: `Synced ${updatedLocal.invoices?.length || 0} invoices and ${updatedLocal.clients?.length || 0} clients linked to ${cleanEmail}!`,
+          };
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('Server email vault pull fallback to Google Drive API / local storage:', e);
+  }
+
+  // 2. Check Google Drive Master File directly if OAuth token is active in memory
   try {
     if (hasActiveGoogleOAuthToken()) {
       const masterFileName = `AfAccounts_Master_Sync_${cleanEmail.replace(/[^a-z0-9]/gi, '_')}.json`;
@@ -570,60 +641,167 @@ export const pullFromCloudAndDriveByEmail = async (
         const parsed: AppBackupPayload = JSON.parse(raw);
         if (parsed && (Array.isArray(parsed.invoices) || Array.isArray(parsed.clients))) {
           applyBackupPayload(parsed, mode);
+          // Also push into server vault so all devices have it
+          const synced = await syncToGoogleDriveCloud(cleanEmail, gatherAppBackupPayload(cleanEmail), 'replace');
           return {
             success: true,
-            data: gatherAppBackupPayload(cleanEmail),
-            message: `Automatically synced data from Google Drive for ${cleanEmail}!`
+            updatedAtMs: synced.updatedAtMs,
+            data: synced.data || gatherAppBackupPayload(cleanEmail),
+            message: `Automatically synced data from Google Drive for ${cleanEmail}!`,
           };
         }
       }
     }
   } catch (e) {
-    console.warn('Google Drive pull fallback to server email vault:', e);
-  }
-
-  // 2. Check Multi-Device Server Email Cloud Vault (/api/sync/:email)
-  try {
-    if (typeof navigator === 'undefined' || navigator.onLine) {
-      const res = await fetch(`/api/sync/${encodeURIComponent(cleanEmail)}`);
-      if (res.ok) {
-        const result = await res.json();
-        if (result.success && result.data) {
-          applyBackupPayload(result.data, mode);
-          // Also cache in local vault
-          const existingBackups = JSON.parse(localStorage.getItem(DRIVE_BACKUPS_STORAGE_KEY) || '{}');
-          existingBackups[cleanEmail] = result.data;
-          localStorage.setItem(DRIVE_BACKUPS_STORAGE_KEY, JSON.stringify(existingBackups));
-          return {
-            success: true,
-            data: gatherAppBackupPayload(cleanEmail),
-            message: `Synced ${result.data.invoices?.length || 0} invoices and ${result.data.clients?.length || 0} clients linked to ${cleanEmail}!`
-          };
-        }
-      }
-    }
-  } catch (e) {
-    console.warn('Server email vault pull fallback to local storage:', e);
+    console.warn('Google Drive direct pull warning:', e);
   }
 
   // 3. Fallback to Local Device Vault
   const localResult = fetchFromGoogleDriveCloud(cleanEmail);
   if (localResult.success && localResult.data) {
     applyBackupPayload(localResult.data, mode);
+    const updatedLocal = gatherAppBackupPayload(cleanEmail);
     return {
       success: true,
-      data: gatherAppBackupPayload(cleanEmail),
-      message: localResult.message
+      updatedAtMs: localResult.data.updatedAtMs || Date.now(),
+      data: updatedLocal,
+      message: localResult.message,
     };
   }
 
-  // If no existing cloud record yet, initialize cloud vault with current device data for this email!
-  await syncToGoogleDriveCloud(cleanEmail);
+  // 4. If no existing cloud record yet, initialize cloud vault with current device data for this email!
+  const initSync = await syncToGoogleDriveCloud(cleanEmail, undefined, 'replace');
   return {
     success: true,
-    data: gatherAppBackupPayload(cleanEmail),
-    message: `Linked ${cleanEmail} and uploaded current device data for multi-device PC & Mobile sync.`
+    updatedAtMs: initSync.updatedAtMs,
+    data: initSync.data || gatherAppBackupPayload(cleanEmail),
+    message: `Linked ${cleanEmail} and uploaded current device data for automatic Google Drive & multi-device sync.`,
   };
+};
+
+/**
+ * Link an Email / Google Drive account directly (no 4-pin OTP required) and auto-sync data across devices
+ */
+export const linkAndSyncGoogleDriveEmail = async (
+  email: string,
+  usernameHint?: string | UserAccount | null,
+  initialPayload?: AppBackupPayload
+): Promise<{
+  success: boolean;
+  email: string;
+  updatedAtMs?: number;
+  data?: AppBackupPayload;
+  message: string;
+}> => {
+  const cleanEmail = (email || '').toLowerCase().trim();
+  if (!cleanEmail || !cleanEmail.includes('@')) {
+    return {
+      success: false,
+      email: cleanEmail,
+      message: 'Please enter a valid Google Drive Email ID (e.g. yourname@gmail.com).',
+    };
+  }
+
+  const resolvedUsername =
+    typeof usernameHint === 'string'
+      ? usernameHint
+      : usernameHint && typeof usernameHint === 'object'
+      ? (usernameHint as any).username || (usernameHint as any).name
+      : undefined;
+
+  markEmailVerified(cleanEmail);
+  setLinkedDriveAccount(cleanEmail);
+  linkGoogleDriveAccountByEmail(cleanEmail, resolvedUsername);
+
+  const currentLocalPayload = initialPayload || gatherAppBackupPayload(cleanEmail);
+
+  // Ask server vault in 'link' mode: if cloud data already exists for this email, adopt it;
+  // otherwise initialize cloud vault with current device data.
+  try {
+    if (typeof navigator === 'undefined' || navigator.onLine) {
+      const res = await fetch('/api/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: cleanEmail,
+          payload: currentLocalPayload,
+          mode: 'link',
+          username: usernameHint,
+        }),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.data) {
+          applyBackupPayload(json.data, 'replace');
+          const hydrated = gatherAppBackupPayload(cleanEmail);
+          hydrated.updatedAtMs = json.updatedAtMs || Date.now();
+          return {
+            success: true,
+            email: cleanEmail,
+            updatedAtMs: hydrated.updatedAtMs,
+            data: hydrated,
+            message: json.message || `Linked ${cleanEmail}! Automatic Google Drive storage & multi-device sync active.`,
+          };
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('Direct link server sync fallback:', e);
+  }
+
+  const pulled = await pullFromCloudAndDriveByEmail(cleanEmail, 'replace');
+  return {
+    success: pulled.success,
+    email: cleanEmail,
+    updatedAtMs: pulled.updatedAtMs,
+    data: pulled.data,
+    message: pulled.message,
+  };
+};
+
+/**
+ * Bootstrap a newly logged-in device session: discovers any linked Google Drive email and pulls latest cloud workspace
+ */
+export const bootstrapSessionFromCloud = async (
+  email?: string | null,
+  username?: string | null
+): Promise<{
+  success: boolean;
+  linkedEmail?: string | null;
+  updatedAtMs?: number;
+  users?: UserAccount[];
+  data?: AppBackupPayload | null;
+}> => {
+  try {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      return { success: false };
+    }
+    const params = new URLSearchParams();
+    if (email) params.set('email', email.toLowerCase().trim());
+    if (username) params.set('username', username.toLowerCase().trim());
+    const res = await fetch(`/api/session-bootstrap?${params.toString()}`);
+    if (res.ok) {
+      const json = await res.json();
+      if (json.linkedEmail) {
+        const cleanEmail = json.linkedEmail.toLowerCase().trim();
+        markEmailVerified(cleanEmail);
+        setLinkedDriveAccount(cleanEmail);
+        if (json.data) {
+          applyBackupPayload(json.data, 'replace');
+        }
+      }
+      return {
+        success: !!json.success,
+        linkedEmail: json.linkedEmail || null,
+        updatedAtMs: json.updatedAtMs || 0,
+        users: json.users || [],
+        data: json.data || null,
+      };
+    }
+  } catch (e) {
+    console.warn('Session bootstrap check warning:', e);
+  }
+  return { success: false };
 };
 
 /**
@@ -1059,18 +1237,12 @@ const VERIFIED_EMAILS_KEY = 'af_verified_emails_map';
 const LOCAL_PENDING_CODES_KEY = 'af_pending_email_codes';
 
 /**
- * Check if an Email ID has been verified via 4-digit verification code (or Google OAuth)
+ * Check if an Email ID is valid and linked for Google Drive & Multi-Device Sync (4-digit OTP removed)
  */
 export const isEmailVerified = (email?: string | null): boolean => {
   if (!email) return false;
   const clean = email.toLowerCase().trim();
-  if (!clean) return false;
-  try {
-    const map = JSON.parse(localStorage.getItem(VERIFIED_EMAILS_KEY) || '{}');
-    return !!map[clean];
-  } catch {
-    return false;
-  }
+  return clean.length > 3 && clean.includes('@');
 };
 
 /**

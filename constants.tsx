@@ -1,4 +1,4 @@
-import { ProjectType, Client, Invoice, InvoiceStatus, CompanySettings, Expense, ExpenseCategory } from './types';
+import { ProjectType, Client, Invoice, InvoiceStatus, CompanySettings, Expense, ExpenseCategory, ReminderTemplate } from './types';
 import { AF_LOGO_SVG_DATA_URI } from './components/AfLogo';
 
 export interface CountryInfo {
@@ -34,6 +34,105 @@ export const SUPPORTED_COUNTRIES: CountryInfo[] = [
   { code: 'GLOBAL', name: 'Other / International', defaultCurrency: 'USD', currencySymbol: '$', defaultTaxRate: 0, taxName: 'Tax', flag: '🌐' }
 ];
 
+export const DEFAULT_REMINDER_TEMPLATES: ReminderTemplate[] = [
+  {
+    id: 'gentle',
+    name: 'Upcoming / Due Today Notice',
+    stageLabel: 'On or Before Due Date',
+    daysThreshold: 0,
+    tone: 'gentle',
+    enabled: true,
+    subject: 'Upcoming Payment Reminder: Invoice #{{invoice_id}} from {{company_name}}',
+    body: `Dear {{customer_name}},
+
+This is a courteous reminder that Invoice #{{invoice_id}} for {{currency}} {{total_amount}} is scheduled for payment on {{due_date}}.
+
+Please find our payment remittance details below:
+{{bank_details}}
+
+If payment has already been initiated, please disregard this reminder. Thank you for your business and partnership!
+
+Warm regards,
+{{company_name}} Accounts Team
+{{company_phone}} | {{company_email}}`
+  },
+  {
+    id: 'first_overdue',
+    name: 'First Overdue Notice',
+    stageLabel: '3 to 7 Days Overdue',
+    daysThreshold: 3,
+    tone: 'polite',
+    enabled: true,
+    subject: 'Friendly Overdue Notice: Invoice #{{invoice_id}} ({{days_overdue}} Days Past Due)',
+    body: `Dear {{customer_name}},
+
+We hope you are having a productive week.
+
+According to our accounts ledger, Invoice #{{invoice_id}} was due on {{due_date}} and is currently {{days_overdue}} days overdue.
+
+Outstanding Balance: {{currency}} {{total_amount}}
+
+Please arrange for payment at your earliest convenience using the details below:
+{{bank_details}}
+
+If you have already processed this remittance or require another copy of the invoice, kindly reply to this email with the bank transfer advice.
+
+Sincerely,
+Finance & Accounts Department
+{{company_name}}`
+  },
+  {
+    id: 'urgent',
+    name: 'Second Follow-up (Urgent)',
+    stageLabel: '14 Days Overdue',
+    daysThreshold: 14,
+    tone: 'urgent',
+    enabled: true,
+    subject: 'URGENT: Overdue Account Follow-up - Invoice #{{invoice_id}}',
+    body: `Dear {{customer_name}},
+
+This is an urgent follow-up regarding unpaid Invoice #{{invoice_id}}, which is now {{days_overdue}} days past its due date of {{due_date}}.
+
+Total Amount Overdue: {{currency}} {{total_amount}}
+
+To keep your commercial credit terms in good standing and ensure uninterrupted service, please settle this outstanding balance immediately.
+
+Bank Remittance Details:
+{{bank_details}}
+
+Please reply to this email immediately with your transfer confirmation.
+
+Thank you for your prompt cooperation,
+Accounts Receivable
+{{company_name}}
+{{company_phone}}`
+  },
+  {
+    id: 'final_demand',
+    name: 'Final Demand Notice',
+    stageLabel: '30+ Days Overdue (Final)',
+    daysThreshold: 30,
+    tone: 'legal',
+    enabled: true,
+    subject: 'FINAL DEMAND FOR PAYMENT: Invoice #{{invoice_id}} - Immediate Action Required',
+    body: `Dear {{customer_name}},
+
+Despite our previous reminders, our accounting records indicate that Invoice #{{invoice_id}} remains unpaid and is now {{days_overdue}} days past due.
+
+Final Amount Payable: {{currency}} {{total_amount}}
+
+Please be advised that full settlement is required within 48 business hours to avoid commercial service suspension and escalation under UAE Federal Commercial regulations.
+
+Direct Remittance Details:
+{{bank_details}}
+
+Please forward bank transfer proof to {{company_email}} immediately upon completion.
+
+Management & Legal Collections,
+{{company_name}}`
+  }
+];
+
 export const INITIAL_SETTINGS: CompanySettings = {
   name: 'AFSY BILLING',
   email: '',
@@ -48,8 +147,8 @@ export const INITIAL_SETTINGS: CompanySettings = {
   defaultTaxRate: 5,
   taxRate: 5,
   taxName: 'VAT',
-  vatNumber: '',
-  trnNumber: '',
+  vatNumber: '100293848100003',
+  trnNumber: '100293848100003',
   bankName: '',
   bankAccount: '',
   invoiceFooterNote: 'Thank you for your business.',
@@ -63,14 +162,21 @@ export const INITIAL_SETTINGS: CompanySettings = {
   aiThemeColor: 'indigo',
   aiDefaultMode: 'hybrid',
   invoicePrefix: 'INV-',
-  invoiceTemplate: 'executive_indigo',
-  invoiceAccentColor: '#4f46e5',
+  invoiceTemplate: 'uae_standard_simple',
+  invoiceAccentColor: '#0f172a',
   invoiceHeaderLayout: 'split',
-  invoiceTableStyle: 'striped',
+  invoiceTableStyle: 'bordered',
   invoiceFontStyle: 'sans',
   invoiceCustomTitle: 'TAX INVOICE',
-  invoiceShowCategoryCol: true,
+  invoiceSubtitle: 'Commercial Goods & Services Supply',
+  invoiceDefaultPaymentTerms: 'none',
+  invoiceShowPaymentTerms: false,
+  invoiceShowSignatures: true,
+  invoiceShowCategoryCol: false,
   invoiceShowBankDetails: true,
+  invoiceShowRemarks: true,
+  invoiceShowAmountInWords: true,
+  invoiceShowFooterNote: true,
   invoiceCompactMode: false,
   statementTemplate: 'standard_audit',
   statementAccentColor: '#0f172a',
@@ -81,7 +187,20 @@ export const INITIAL_SETTINGS: CompanySettings = {
   statementShowRemittance: true,
   statementCompactMode: false,
   statementDefaultView: 'date_wise',
-  statementDefaultOrientation: 'portrait'
+  statementDefaultOrientation: 'portrait',
+  autoRemindersEnabled: true,
+  reminderFrequency: 'weekly',
+  reminderCustomIntervalDays: 7,
+  reminderSendBeforeDue: true,
+  reminderBeforeDueDays: 3,
+  reminderSendOnDueDate: true,
+  reminderMaxCountPerInvoice: 4,
+  reminderMinBalanceThreshold: 5,
+  reminderSenderName: 'AFSY BILLING Accounts',
+  reminderReplyToEmail: '',
+  reminderCcAccountsEmail: '',
+  reminderTemplates: DEFAULT_REMINDER_TEMPLATES,
+  reminderLogs: []
 };
 
 export interface DocumentTemplatePreset {
@@ -98,10 +217,32 @@ export interface DocumentTemplatePreset {
 
 export const INVOICE_TEMPLATE_PRESETS: DocumentTemplatePreset[] = [
   {
+    id: 'personal_neat_custom',
+    name: 'Personal Neat Custom Invoice',
+    category: 'Personal Business • Fully Customizable',
+    description: 'Neat, personalized business invoice format. Customize all sections, colors, fonts, and headers to match your business.',
+    accentColor: '#0f172a',
+    headerLayout: 'split',
+    tableStyle: 'bordered',
+    fontStyle: 'sans',
+    compactMode: false
+  },
+  {
+    id: 'uae_standard_simple',
+    name: 'UAE Standard Tax Invoice (Simple)',
+    category: 'Default • All Businesses',
+    description: 'Clean, FTA-compliant UAE standard layout with TRN, SL#, Item Description, Qty, Unit Price, 5% VAT & Total.',
+    accentColor: '#0f172a',
+    headerLayout: 'split',
+    tableStyle: 'bordered',
+    fontStyle: 'sans',
+    compactMode: false
+  },
+  {
     id: 'executive_indigo',
     name: 'Executive Corporate',
-    category: 'UAE Standard',
-    description: 'Clean top accent bar, left corporate branding, high-contrast date badges, and structured totals.',
+    category: 'UAE Corporate',
+    description: 'Clean top accent bar, left corporate branding, structured line items, and clear VAT breakdown.',
     accentColor: '#4f46e5',
     headerLayout: 'split',
     tableStyle: 'striped',
@@ -112,7 +253,7 @@ export const INVOICE_TEMPLATE_PRESETS: DocumentTemplatePreset[] = [
     id: 'emirates_gold',
     name: 'Emirates Royal Gold',
     category: 'Prestige Gold',
-    description: 'Warm gold header rules, formal TRN tax box, luxury editorial typography, and gold-accented table.',
+    description: 'Warm gold header rules, formal TRN tax box, classic typography, and gold-accented table.',
     accentColor: '#b45309',
     headerLayout: 'split',
     tableStyle: 'bordered',
@@ -122,8 +263,8 @@ export const INVOICE_TEMPLATE_PRESETS: DocumentTemplatePreset[] = [
   {
     id: 'corporate_navy',
     name: 'Dark Navy Banner',
-    category: 'Enterprise',
-    description: 'Full-width deep navy header banner with white typography and crisp corporate grid lines.',
+    category: 'Enterprise & Trading',
+    description: 'Full-width deep navy header banner with white typography and crisp commercial grid lines.',
     accentColor: '#0f172a',
     headerLayout: 'banner',
     tableStyle: 'bordered',
@@ -132,8 +273,8 @@ export const INVOICE_TEMPLATE_PRESETS: DocumentTemplatePreset[] = [
   },
   {
     id: 'dubai_minimal',
-    name: 'Minimalist Swiss Studio',
-    category: 'Editorial Clean',
+    name: 'Minimalist Clean',
+    category: 'Simple & Modern',
     description: 'Ultra-clean monochrome layout with hairline dividers, unboxed metadata, and airy spacing.',
     accentColor: '#1e293b',
     headerLayout: 'split',
@@ -144,8 +285,8 @@ export const INVOICE_TEMPLATE_PRESETS: DocumentTemplatePreset[] = [
   {
     id: 'modern_emerald',
     name: 'Modern Emerald Split',
-    category: 'Financial Green',
-    description: 'Contemporary emerald header accents, tinted client card, and highlighted settlement totals.',
+    category: 'Commercial Green',
+    description: 'Contemporary emerald header accents, clean customer card, and highlighted settlement totals.',
     accentColor: '#047857',
     headerLayout: 'reversed',
     tableStyle: 'striped',
@@ -164,21 +305,10 @@ export const INVOICE_TEMPLATE_PRESETS: DocumentTemplatePreset[] = [
     compactMode: false
   },
   {
-    id: 'creative_agency',
-    name: 'Creative Production Bold',
-    category: 'Media & Studio',
-    description: 'Vibrant violet studio banner designed for creative agencies, production houses, and campaigns.',
-    accentColor: '#7c3aed',
-    headerLayout: 'banner',
-    tableStyle: 'striped',
-    fontStyle: 'sans',
-    compactMode: false
-  },
-  {
     id: 'compact_commercial',
-    name: 'Compact Commercial Tax',
+    name: 'Compact Wholesale & Retail',
     category: 'High Density',
-    description: 'Space-optimized commercial tax layout engineered to fit 20+ line items cleanly on one A4 page.',
+    description: 'Space-optimized commercial tax layout engineered to fit 20+ items cleanly on one A4 page.',
     accentColor: '#0f766e',
     headerLayout: 'split',
     tableStyle: 'bordered',
@@ -293,13 +423,12 @@ export const CURRENCIES = [
 ];
 
 export const SERVICE_CATALOG: Record<string, string[]> = {
-  'Ad Campaign': ['Shoot', 'Pre-Production', 'Creative Direction', 'Talent & Casting', 'Location Permit'],
-  'Video Production': ['Commercial Shoot', 'Corporate Video', 'Drone Cinematography', 'Studio Lighting & Grip'],
-  'Poster Design': ['Key Visual Design', 'Social Media Poster', 'Billboard Layout', 'Print Ready Artwork'],
-  'Post Production': ['4K Video Editing', 'Color Grading', '3D & VFX Motion', 'Sound Design & Mastering'],
-  'Social Media': ['Monthly Retainer', 'Reels Package (10x)', 'Content Strategy', 'Paid Media Management'],
-  'Photography': ['Product Shoot', 'Fashion & Editorial', 'Event Coverage', 'High-End Retouching'],
-  'Branding': ['Logo & Identity', 'Brand Guidelines', 'Packaging Design', 'Pitch Deck Design']
+  'General Trading': ['Product Supply', 'Wholesale Goods', 'Materials & Parts', 'Equipment Supply', 'General Item'],
+  'Services': ['Consultation', 'Installation & Setup', 'Maintenance & Repair', 'Service Charge', 'Support'],
+  'Contracting': ['Civil & Fit-out Works', 'MEP & Technical Works', 'Labor & Manpower', 'Project Milestone', 'Site Supply'],
+  'IT & Digital': ['Software & Licensing', 'Web & App Development', 'Hardware & Networking', 'Annual Maintenance (AMC)'],
+  'Logistics & Transport': ['Delivery & Freight', 'Customs & Clearance', 'Warehousing', 'Transportation'],
+  'General': ['Standard Item', 'General Service', 'Miscellaneous']
 };
 
 export const SERVICE_PRESETS = Object.entries(SERVICE_CATALOG).map(([category, services]) => ({
@@ -318,25 +447,31 @@ export const MOCK_STAFF_ATTENDANCE = [];
 export const MOCK_INVOICES: Invoice[] = [];
 
 export const DEFAULT_EXPENSE_CATEGORIES = [
-  'Office Supplies',
-  'Software & Subscriptions',
+  'Purchases & Inventory',
   'Rent & Utilities',
-  'Marketing & Advertising',
-  'Travel & Transport',
-  'Equipment & Hardware',
-  'Professional Services',
-  'Fuel & Vehicle',
-  'Meals & Entertainment',
+  'Salaries & Wages',
+  'Office Supplies',
+  'Fuel & Transport',
+  'Maintenance & Repairs',
+  'Software & Telecom',
+  'Marketing & Business',
+  'Government & Visa Fees',
   'Miscellaneous'
 ];
 
 export const MOCK_EXPENSES: Expense[] = [];
 
 export const SERVICE_DEFAULTS = {
-  [ProjectType.VIDEO_PRODUCTION]: 12000,
-  [ProjectType.PRODUCT_SHOOT]: 5000,
-  [ProjectType.AD_CAMPAIGN]: 25000,
-  [ProjectType.POSTER_DESIGN]: 1500,
-  [ProjectType.POST_PRODUCTION]: 2500,
-  [ProjectType.SOCIAL_MEDIA]: 3500,
+  [ProjectType.GENERAL]: 1000,
+  [ProjectType.GOODS_SUPPLY]: 2500,
+  [ProjectType.SERVICES]: 1500,
+  [ProjectType.CONSULTING]: 3000,
+  [ProjectType.CONTRACTING]: 5000,
+  [ProjectType.IT_SOFTWARE]: 4000,
+  [ProjectType.VIDEO_PRODUCTION]: 5000,
+  [ProjectType.PRODUCT_SHOOT]: 2500,
+  [ProjectType.AD_CAMPAIGN]: 5000,
+  [ProjectType.POSTER_DESIGN]: 1000,
+  [ProjectType.POST_PRODUCTION]: 1500,
+  [ProjectType.SOCIAL_MEDIA]: 2000,
 };

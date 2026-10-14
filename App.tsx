@@ -60,7 +60,9 @@ import {
   gatherAppBackupPayload,
   backupDirectlyToGoogleDrive,
   isEmailVerified,
-  markEmailVerified
+  markEmailVerified,
+  linkAndSyncGoogleDriveEmail,
+  bootstrapSessionFromCloud
 } from './services/driveService';
 import {
   signInWithGoogleDrive,
@@ -125,6 +127,10 @@ const App: React.FC = () => {
   const [isSyncing, setIsSyncing] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const isInitialMountRef = useRef<boolean>(true);
+  const isApplyingRemoteSyncRef = useRef<boolean>(false);
+  const lastSyncedTimestampRef = useRef<number>(
+    Number(typeof window !== 'undefined' ? localStorage.getItem('af_last_sync_ms') || '0' : '0') || 0
+  );
   const saveBlinkTimeoutRef = useRef<number | null>(null);
   const [isOnline, setIsOnline] = useState<boolean>(() =>
     typeof navigator !== 'undefined' ? navigator.onLine : true
@@ -193,6 +199,9 @@ const App: React.FC = () => {
         return {
           ...INITIAL_SETTINGS,
           ...parsed,
+          reminderTemplates: parsed.reminderTemplates?.length ? parsed.reminderTemplates : INITIAL_SETTINGS.reminderTemplates,
+          vatNumber: parsed.vatNumber || INITIAL_SETTINGS.vatNumber || '100293848100003',
+          trnNumber: parsed.trnNumber || parsed.vatNumber || INITIAL_SETTINGS.trnNumber || '100293848100003',
           currencySymbol:
             !parsed.currencySymbol || parsed.currencySymbol === 'د.إ'
               ? '\u20C3'
@@ -235,9 +244,11 @@ const App: React.FC = () => {
     const handleOnline = () => {
       setIsOnline(true);
       if (activeSyncEmail) {
-        pullFromCloudAndDriveByEmail(activeSyncEmail, 'merge')
+        pullFromCloudAndDriveByEmail(activeSyncEmail, 'replace')
           .then(res => {
-            if (res.success && res.data) handleRestoreAllData(res.data);
+            if (res.success && res.data) {
+              handleRestoreAllData(res.data, true);
+            }
           })
           .catch(() => {});
       }
@@ -270,39 +281,104 @@ const App: React.FC = () => {
     };
   }, [activeSyncEmail]);
 
-  // Automatic Pull from Cloud & Google Drive when User Logs In or Email is Linked + Real-Time Live Mirroring
-  const hasInitialPulledRef = useRef<string>('');
+  // Automatic Bootstrap & Real-Time Multi-Device Sync (SSE + Fast Polling + Tab Focus)
+  const hasBootstrappedUserRef = useRef<string>('');
+  useEffect(() => {
+    if (!user) return;
+    const emailCandidate = (user.email || settings.driveSyncEmail || getLinkedDriveAccount() || '').trim().toLowerCase();
+    const bootstrapKey = `${user.username}:${emailCandidate}`;
+
+    if (hasBootstrappedUserRef.current !== bootstrapKey) {
+      hasBootstrappedUserRef.current = bootstrapKey;
+      bootstrapSessionFromCloud(user.username, emailCandidate || undefined)
+        .then(res => {
+          if (res.linkedEmail) {
+            const clean = res.linkedEmail.toLowerCase().trim();
+            setSyncEmailInput(clean);
+            setDriveConnected(true);
+            setSettings(prev => (prev.driveSyncEmail === clean ? prev : { ...prev, driveSyncEmail: clean, autoDriveSync: true }));
+            if (!user.email || user.email.toLowerCase().trim() !== clean) {
+              const updatedU = { ...user, email: clean };
+              setUser(updatedU);
+              localStorage.setItem('af_current_user', JSON.stringify(updatedU));
+            }
+          }
+          if (res.success && res.data) {
+            handleRestoreAllData(res.data, true);
+          }
+        })
+        .catch(err => console.warn('Session bootstrap check:', err));
+    }
+  }, [user?.username, user?.email, settings.driveSyncEmail]);
+
   useEffect(() => {
     const emailToSync = (user?.email || settings.driveSyncEmail || getLinkedDriveAccount() || '').trim().toLowerCase();
     if (!emailToSync) return;
 
-    if (hasInitialPulledRef.current !== emailToSync) {
-      hasInitialPulledRef.current = emailToSync;
-      setSyncEmailInput(emailToSync);
+    const checkAndPullRemote = async (forceApply: boolean = false) => {
+      if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+      try {
+        const res = await fetch(`/api/sync/${encodeURIComponent(emailToSync)}`);
+        if (!res.ok) return;
+        const json = await res.json();
+        if (json?.success && json?.data) {
+          const remoteData = json.data as AppBackupPayload;
+          const remoteMs =
+            Number(remoteData.updatedAtMs) ||
+            (remoteData.lastSyncTime ? new Date(remoteData.lastSyncTime).getTime() : 0) ||
+            (remoteData.exportedAt ? new Date(remoteData.exportedAt).getTime() : 0);
 
-      pullFromCloudAndDriveByEmail(emailToSync, 'merge')
-        .then(res => {
-          if (res.success && res.data) {
-            handleRestoreAllData(res.data);
+          if (forceApply || remoteMs > lastSyncedTimestampRef.current) {
+            lastSyncedTimestampRef.current = Math.max(Date.now(), remoteMs);
+            localStorage.setItem('af_last_sync_ms', String(lastSyncedTimestampRef.current));
+            handleRestoreAllData(remoteData, true);
           }
-        })
-        .catch(err => console.warn('Initial email sync check:', err));
+        }
+      } catch {
+        // ignore transient offline error
+      }
+    };
+
+    // 1. Real-Time Server-Sent Events (SSE) stream for instant reflection across all linked devices
+    let eventSource: EventSource | null = null;
+    try {
+      eventSource = new EventSource(`/api/sync-stream?email=${encodeURIComponent(emailToSync)}`);
+      eventSource.onmessage = event => {
+        try {
+          const parsed = JSON.parse(event.data);
+          if (parsed?.type === 'sync_update') {
+            const incomingMs = Number(parsed.updatedAtMs) || 0;
+            if (incomingMs > lastSyncedTimestampRef.current) {
+              checkAndPullRemote(true);
+            }
+          }
+        } catch {
+          // ignore
+        }
+      };
+    } catch {
+      // SSE fallback to polling
     }
 
-    // Continuous Real-Time Background Mirroring once Email ID is verified
+    // 2. Fast 4-second background polling + window focus listener for multi-device consistency
     const mirrorInterval = window.setInterval(() => {
-      if (isEmailVerified(emailToSync) && (typeof navigator === 'undefined' || navigator.onLine)) {
-        pullFromCloudAndDriveByEmail(emailToSync, 'merge')
-          .then(res => {
-            if (res.success && res.data) {
-              handleRestoreAllData(res.data);
-            }
-          })
-          .catch(() => {});
-      }
-    }, 15000);
+      checkAndPullRemote(false);
+    }, 4000);
 
-    return () => window.clearInterval(mirrorInterval);
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        checkAndPullRemote(false);
+      }
+    };
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+
+    return () => {
+      if (eventSource) eventSource.close();
+      window.clearInterval(mirrorInterval);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+    };
   }, [user?.email, settings.driveSyncEmail]);
 
   const toggleTheme = () => {
@@ -328,7 +404,6 @@ const App: React.FC = () => {
 
   // Persistence Saving to Local Device Storage + Automatic Background Cloud & Drive Sync
   useEffect(() => {
-    setIsSyncing(true);
     localStorage.setItem('cf_invoices', JSON.stringify(invoices));
     localStorage.setItem('cf_expenses', JSON.stringify(expenses));
     localStorage.setItem('cf_clients', JSON.stringify(clients));
@@ -341,9 +416,19 @@ const App: React.FC = () => {
 
     if (isInitialMountRef.current) {
       isInitialMountRef.current = false;
-    } else {
-      setSaveStatus('saving');
+      return;
     }
+
+    if (isApplyingRemoteSyncRef.current) {
+      isApplyingRemoteSyncRef.current = false;
+      return;
+    }
+
+    setIsSyncing(true);
+    setSaveStatus('saving');
+    const changeTimestamp = Date.now();
+    lastSyncedTimestampRef.current = changeTimestamp;
+    localStorage.setItem('af_last_sync_ms', String(changeTimestamp));
 
     const timer = setTimeout(() => {
       setIsSyncing(false);
@@ -367,7 +452,8 @@ const App: React.FC = () => {
       if (emailToSync) {
         const payload: AppBackupPayload = {
           version: '2.0',
-          exportedAt: new Date().toISOString(),
+          exportedAt: new Date(changeTimestamp).toISOString(),
+          updatedAtMs: changeTimestamp,
           userEmail: emailToSync,
           invoices,
           clients,
@@ -376,17 +462,30 @@ const App: React.FC = () => {
           staffAdvances,
           staffAttendance,
           categories,
-          settings,
+          settings: {
+            ...settings,
+            driveSyncEmail: emailToSync,
+            autoDriveSync: true
+          },
           users
         };
-        syncToGoogleDriveCloud(emailToSync, payload).catch(() => {});
+        syncToGoogleDriveCloud(emailToSync, payload, 'replace').catch(() => {});
       }
-    }, 550);
+    }, 350);
 
     return () => clearTimeout(timer);
   }, [invoices, expenses, clients, staffList, staffAdvances, staffAttendance, categories, settings, users, user?.email]);
 
-  const handleRestoreAllData = (payload: AppBackupPayload) => {
+  const handleRestoreAllData = (payload: AppBackupPayload, fromRemoteSync: boolean = false) => {
+    if (fromRemoteSync) {
+      isApplyingRemoteSyncRef.current = true;
+      const remoteMs =
+        Number(payload.updatedAtMs) ||
+        (payload.lastSyncTime ? new Date(payload.lastSyncTime).getTime() : 0) ||
+        Date.now();
+      lastSyncedTimestampRef.current = Math.max(lastSyncedTimestampRef.current, remoteMs);
+      localStorage.setItem('af_last_sync_ms', String(lastSyncedTimestampRef.current));
+    }
     if (payload.invoices) {
       setInvoices(prev =>
         JSON.stringify(prev) === JSON.stringify(payload.invoices) ? prev : payload.invoices
@@ -449,12 +548,25 @@ const App: React.FC = () => {
     localStorage.setItem('af_current_user', JSON.stringify(userAccount));
     setActiveView('dashboard');
 
-    const loginEmail = userAccount.email || settings.driveSyncEmail || getLinkedDriveAccount();
-    if (loginEmail) {
-      setSyncEmailInput(loginEmail);
-      const res = await pullFromCloudAndDriveByEmail(loginEmail, 'merge');
+    const loginEmail = (userAccount.email || settings.driveSyncEmail || getLinkedDriveAccount() || '').trim().toLowerCase();
+    const bootRes = await bootstrapSessionFromCloud(userAccount.username, loginEmail || undefined);
+    const resolvedEmail = bootRes.linkedEmail || loginEmail;
+
+    if (resolvedEmail) {
+      setSyncEmailInput(resolvedEmail);
+      setDriveConnected(true);
+      if (!userAccount.email || userAccount.email.toLowerCase().trim() !== resolvedEmail) {
+        const updatedUser = { ...userAccount, email: resolvedEmail };
+        setUser(updatedUser);
+        localStorage.setItem('af_current_user', JSON.stringify(updatedUser));
+      }
+    }
+    if (bootRes.success && bootRes.data) {
+      handleRestoreAllData(bootRes.data, true);
+    } else if (resolvedEmail) {
+      const res = await pullFromCloudAndDriveByEmail(resolvedEmail, 'replace');
       if (res.success && res.data) {
-        handleRestoreAllData(res.data);
+        handleRestoreAllData(res.data, true);
       }
     }
   };
@@ -519,23 +631,36 @@ const App: React.FC = () => {
     if (e) e.preventDefault();
     const targetEmail = (syncEmailInput || activeSyncEmail).trim().toLowerCase();
     if (!targetEmail) {
-      setSyncStatusMsg('Please enter your Email ID to link PC & Mobile devices.');
+      setSyncStatusMsg('Please enter your Google Drive Email ID to link PC & Mobile devices.');
       return;
     }
 
     setIsPullingCloud(true);
-    setSyncStatusMsg('Syncing data across Google Drive & Multi-Device Email Vault...');
+    setSyncStatusMsg('Linking & syncing data across Google Drive and all devices...');
     try {
-      setLinkedDriveAccount(targetEmail);
+      const currentPayload: AppBackupPayload = {
+        version: '2.0',
+        exportedAt: new Date().toISOString(),
+        updatedAtMs: Date.now(),
+        userEmail: targetEmail,
+        invoices,
+        clients,
+        expenses,
+        staffList,
+        staffAdvances,
+        staffAttendance,
+        categories,
+        settings: { ...settings, driveSyncEmail: targetEmail, autoDriveSync: true },
+        users
+      };
+      const res = await linkAndSyncGoogleDriveEmail(targetEmail, user, currentPayload);
+      setDriveConnected(true);
       setSettings(prev => ({ ...prev, driveSyncEmail: targetEmail, autoDriveSync: true }));
-      if (user && !user.email) {
+      if (user && user.email !== targetEmail) {
         handleUpdateCurrentUser({ ...user, email: targetEmail });
       }
-      // First push current local data so nothing is lost, then pull merged dataset
-      await syncToGoogleDriveCloud(targetEmail);
-      const res = await pullFromCloudAndDriveByEmail(targetEmail, 'merge');
-      if (res.success && res.data) {
-        handleRestoreAllData(res.data);
+      if (res.data) {
+        handleRestoreAllData(res.data, true);
       }
       setSyncStatusMsg(res.message || `All data linked and synced with ${targetEmail}!`);
     } catch (err: any) {
@@ -557,17 +682,31 @@ const App: React.FC = () => {
         setSyncEmailInput(gEmail);
         setLinkedDriveAccount(gEmail);
         setSettings(prev => ({ ...prev, driveSyncEmail: gEmail, autoDriveSync: true }));
-        if (user && !user.email) {
+        if (user && user.email !== gEmail) {
           handleUpdateCurrentUser({ ...user, email: gEmail });
         }
 
-        const pulled = await pullFromCloudAndDriveByEmail(gEmail, 'merge');
-        if (pulled.success && pulled.data) {
-          handleRestoreAllData(pulled.data);
+        const currentPayload: AppBackupPayload = {
+          version: '2.0',
+          exportedAt: new Date().toISOString(),
+          updatedAtMs: Date.now(),
+          userEmail: gEmail,
+          invoices,
+          clients,
+          expenses,
+          staffList,
+          staffAdvances,
+          staffAttendance,
+          categories,
+          settings: { ...settings, driveSyncEmail: gEmail, autoDriveSync: true },
+          users
+        };
+        const syncRes = await linkAndSyncGoogleDriveEmail(gEmail, user, currentPayload);
+        if (syncRes.data) {
+          handleRestoreAllData(syncRes.data, true);
         }
-        await backupDirectlyToGoogleDrive(gatherAppBackupPayload(gEmail));
         triggerSaveBlink();
-        setSyncStatusMsg(`Connected Google Drive (${gEmail}) & synced all data across devices!`);
+        setSyncStatusMsg(`Connected Google Drive (${gEmail}) & auto-synced all data across devices!`);
       }
     } catch (err: any) {
       const fallbackEmail = (syncEmailInput || activeSyncEmail || '').toLowerCase().trim();
@@ -576,15 +715,32 @@ const App: React.FC = () => {
         setDriveConnected(true);
         setLinkedDriveAccount(fallbackEmail);
         setSettings(prev => ({ ...prev, driveSyncEmail: fallbackEmail, autoDriveSync: true }));
-        const pulled = await pullFromCloudAndDriveByEmail(fallbackEmail, 'merge');
-        if (pulled.success && pulled.data) {
-          handleRestoreAllData(pulled.data);
+        if (user && user.email !== fallbackEmail) {
+          handleUpdateCurrentUser({ ...user, email: fallbackEmail });
         }
-        await backupDirectlyToGoogleDrive(gatherAppBackupPayload(fallbackEmail));
+        const currentPayload: AppBackupPayload = {
+          version: '2.0',
+          exportedAt: new Date().toISOString(),
+          updatedAtMs: Date.now(),
+          userEmail: fallbackEmail,
+          invoices,
+          clients,
+          expenses,
+          staffList,
+          staffAdvances,
+          staffAttendance,
+          categories,
+          settings: { ...settings, driveSyncEmail: fallbackEmail, autoDriveSync: true },
+          users
+        };
+        const syncRes = await linkAndSyncGoogleDriveEmail(fallbackEmail, user, currentPayload);
+        if (syncRes.data) {
+          handleRestoreAllData(syncRes.data, true);
+        }
         triggerSaveBlink();
-        setSyncStatusMsg(`Linked Google Drive Mirror (${fallbackEmail}) & synced all data!`);
+        setSyncStatusMsg(`Linked Google Drive (${fallbackEmail}) & auto-synced all data!`);
       } else {
-        setSyncStatusMsg(err?.message || 'Could not connect Google Drive popup. Email sync remains active.');
+        setSyncStatusMsg(err?.message || 'Enter your Google Drive email below to link and auto-sync.');
       }
     } finally {
       setIsPullingCloud(false);
@@ -792,27 +948,25 @@ const App: React.FC = () => {
               />
             </div>
 
-            {/* Multi-Device Email 4-Digit Verification & Google Drive Mirror Status Button */}
+            {/* Google Drive & Multi-Device Auto-Sync Status Button */}
             <button
               onClick={() => setShowSyncModal(true)}
               className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border text-[11px] font-black transition-all truncate max-w-[190px] sm:max-w-[260px] ${
-                activeSyncEmail && isEmailVerified(activeSyncEmail)
+                activeSyncEmail
                   ? 'bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/60 dark:hover:bg-emerald-900/60 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300'
                   : 'bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:hover:bg-indigo-900/60 border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300'
               }`}
-              title="Click to verify Email ID with 4-digit code & mirror Google Drive"
+              title="Click to manage Google Drive & Multi-Device Auto-Sync"
             >
-              {activeSyncEmail && isEmailVerified(activeSyncEmail) ? (
-                <ShieldCheck size={13} className="text-emerald-600 shrink-0" />
+              {activeSyncEmail ? (
+                <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />
               ) : (
                 <Cloud size={13} className={isSyncing ? 'animate-bounce shrink-0' : 'shrink-0'} />
               )}
               <span className="truncate">
                 {activeSyncEmail
-                  ? isEmailVerified(activeSyncEmail)
-                    ? `${activeSyncEmail} (Verified)`
-                    : `${activeSyncEmail} (Verify 4-Digit)`
-                  : 'Verify Email (4-Digit) & Sync'}
+                  ? `${activeSyncEmail} (Drive Synced)`
+                  : 'Link Google Drive & Auto-Sync'}
               </span>
             </button>
 
@@ -1130,6 +1284,8 @@ const App: React.FC = () => {
               onTriggerTestBlink={triggerSaveBlink}
               onOpenEmailVerifyModal={() => setShowSyncModal(true)}
               language={language}
+              invoices={invoices}
+              clients={clients}
             />
           )}
         </div>
@@ -1162,7 +1318,7 @@ const App: React.FC = () => {
         </nav>
       </main>
 
-      {/* 4-DIGIT EMAIL VERIFICATION + AUTOMATIC GOOGLE DRIVE MIRROR MODAL */}
+      {/* GOOGLE DRIVE & MULTI-DEVICE AUTO-SYNC MODAL */}
       <EmailVerificationModal
         isOpen={showSyncModal}
         onClose={() => setShowSyncModal(false)}
@@ -1172,6 +1328,7 @@ const App: React.FC = () => {
         isSyncingExternal={isPullingCloud}
         onVerifiedAndMirrored={(verifiedEmail, payload) => {
           markEmailVerified(verifiedEmail);
+          setDriveConnected(true);
           setSyncEmailInput(verifiedEmail);
           setLinkedDriveAccount(verifiedEmail);
           setSettings(prev => ({
@@ -1179,11 +1336,11 @@ const App: React.FC = () => {
             driveSyncEmail: verifiedEmail,
             autoDriveSync: true
           }));
-          if (user && !user.email) {
+          if (user && user.email !== verifiedEmail) {
             handleUpdateCurrentUser({ ...user, email: verifiedEmail });
           }
           if (payload) {
-            handleRestoreAllData(payload);
+            handleRestoreAllData(payload, true);
           }
           triggerSaveBlink();
         }}

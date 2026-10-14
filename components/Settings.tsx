@@ -64,7 +64,8 @@ import {
   deleteBackupFileFromDrive,
   setLinkedDriveAccount,
   markEmailVerified,
-  isEmailVerified
+  isEmailVerified,
+  linkAndSyncGoogleDriveEmail
 } from '../services/driveService';
 import {
   signInWithGoogleDrive,
@@ -231,16 +232,20 @@ export const Settings: React.FC<SettingsProps> = ({
         if (connectedEmail) {
           markEmailVerified(connectedEmail);
           setLinkedDriveAccount(connectedEmail);
-          handleFieldChange('driveSyncEmail', connectedEmail);
-          const pulled = await pullFromCloudAndDriveByEmail(connectedEmail, 'merge');
-          if (pulled.success && pulled.data && onRestoreData) {
-            onRestoreData(pulled.data);
+          const updatedSettings = { ...formData, driveSyncEmail: connectedEmail, autoDriveSync: true };
+          setFormData(updatedSettings);
+          onUpdate(updatedSettings);
+          if (currentUser && onUpdateCurrentUser && currentUser.email !== connectedEmail) {
+            onUpdateCurrentUser({ ...currentUser, email: connectedEmail });
           }
-          await backupDirectlyToGoogleDrive(gatherAppBackupPayload(connectedEmail));
+          const syncRes = await linkAndSyncGoogleDriveEmail(connectedEmail, currentUser);
+          if (syncRes.data && onRestoreData) {
+            onRestoreData(syncRes.data);
+          }
         }
         setSaveToast({
           show: true,
-          msg: `Connected to Google Drive as ${connectedEmail || res.user.displayName}!`,
+          msg: `Connected to Google Drive as ${connectedEmail || res.user.displayName}! Auto-sync is active across all devices.`,
           type: 'success'
         });
         await handleFetchDriveFiles(connectedEmail);
@@ -254,11 +259,16 @@ export const Settings: React.FC<SettingsProps> = ({
         setIsGoogleConnected(true);
         setGoogleUser(linkedProfile);
         setLinkedDriveAccount(fallbackEmail);
-        const pulled = await pullFromCloudAndDriveByEmail(fallbackEmail, 'merge');
-        if (pulled.success && pulled.data && onRestoreData) {
-          onRestoreData(pulled.data);
+        const updatedSettings = { ...formData, driveSyncEmail: fallbackEmail, autoDriveSync: true };
+        setFormData(updatedSettings);
+        onUpdate(updatedSettings);
+        if (currentUser && onUpdateCurrentUser && currentUser.email !== fallbackEmail) {
+          onUpdateCurrentUser({ ...currentUser, email: fallbackEmail });
         }
-        await backupDirectlyToGoogleDrive(gatherAppBackupPayload(fallbackEmail));
+        const syncRes = await linkAndSyncGoogleDriveEmail(fallbackEmail, currentUser);
+        if (syncRes.data && onRestoreData) {
+          onRestoreData(syncRes.data);
+        }
         await handleFetchDriveFiles(fallbackEmail);
         setSaveToast({
           show: true,
@@ -269,7 +279,7 @@ export const Settings: React.FC<SettingsProps> = ({
         driveEmailInputRef.current?.focus();
         setSaveToast({
           show: true,
-          msg: 'Browser blocked the sign-in popup. Enter your Google Email below and click "Link Google Drive Email" to connect immediately.',
+          msg: 'Enter your Google Email below and click "Link Account" to connect and auto-sync immediately.',
           type: 'error'
         });
       }
@@ -298,19 +308,22 @@ export const Settings: React.FC<SettingsProps> = ({
       setLinkedDriveAccount(cleanEmail);
       setIsGoogleConnected(true);
       setGoogleUser(profile);
-      handleFieldChange('driveSyncEmail', cleanEmail);
-
-      // Pull & merge any existing records on cloud vault, then push initial backup archive
-      const pulled = await pullFromCloudAndDriveByEmail(cleanEmail, 'merge');
-      if (pulled.success && pulled.data && onRestoreData) {
-        onRestoreData(pulled.data);
+      const updatedSettings = { ...formData, driveSyncEmail: cleanEmail, autoDriveSync: true };
+      setFormData(updatedSettings);
+      onUpdate(updatedSettings);
+      if (currentUser && onUpdateCurrentUser && currentUser.email !== cleanEmail) {
+        onUpdateCurrentUser({ ...currentUser, email: cleanEmail });
       }
-      await backupDirectlyToGoogleDrive(gatherAppBackupPayload(cleanEmail));
+
+      const syncRes = await linkAndSyncGoogleDriveEmail(cleanEmail, currentUser);
+      if (syncRes.data && onRestoreData) {
+        onRestoreData(syncRes.data);
+      }
       await handleFetchDriveFiles(cleanEmail);
 
       setSaveToast({
         show: true,
-        msg: `Google Drive linked with ${cleanEmail}! Cloud backup & multi-device sync are now active.`,
+        msg: `Google Drive linked with ${cleanEmail}! Auto-saved data & multi-device sync are now active.`,
         type: 'success'
       });
     } catch (err: any) {
@@ -903,6 +916,11 @@ export const Settings: React.FC<SettingsProps> = ({
             onUpdateFields={partial => {
               setFormData(prev => ({ ...prev, ...partial }));
             }}
+            onSaveSettings={() => handleSave()}
+            onSaveToast={(msg, type) => {
+              setSaveToast({ show: true, msg, type: type || 'success' });
+              setTimeout(() => setSaveToast({ show: false }), 4500);
+            }}
           />
           <div className="flex items-center justify-end gap-3">
             {hasChanges && (
@@ -1062,8 +1080,8 @@ export const Settings: React.FC<SettingsProps> = ({
                         onClick={onOpenEmailVerifyModal}
                         className="inline-flex items-center gap-1.5 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 text-indigo-700 dark:text-indigo-300 px-3.5 py-2.5 rounded-xl border border-indigo-200 dark:border-indigo-800 text-xs font-bold transition-all"
                       >
-                        <KeyRound size={14} />
-                        <span>Verify with 4-Digit Code</span>
+                        <Cloud size={14} />
+                        <span>Link Email &amp; Multi-Device Sync</span>
                       </button>
                     )}
                   </>

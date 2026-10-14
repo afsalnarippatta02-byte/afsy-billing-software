@@ -207,7 +207,9 @@ export const InvoiceList: React.FC<InvoiceListProps> = ({
   const filteredInvoices = useMemo(() => {
     return invoices.filter(inv => {
       const client = (clients || []).find(c => c.id === inv.clientId);
-      const clientDisplayName = client ? `${client.company} ${client.name}` : '';
+      const clientDisplayName = client
+        ? `${client.company} ${client.name}`
+        : inv.customerName || '';
       const effectiveStatus = getEffectiveStatus(inv);
 
       const matchesFilter =
@@ -313,7 +315,7 @@ export const InvoiceList: React.FC<InvoiceListProps> = ({
       return [
         inv.id,
         docType,
-        `"${(client?.company || 'Unknown').replace(/"/g, '""')}"`,
+        `"${(client?.company || inv.customerName || 'Walk-in Customer').replace(/"/g, '""')}"`,
         `"${(client?.name || '').replace(/"/g, '""')}"`,
         formatDate(inv.date),
         formatDate(inv.dueDate),
@@ -675,10 +677,10 @@ export const InvoiceList: React.FC<InvoiceListProps> = ({
                     <td className="px-4 py-4">
                       <div>
                         <p className="font-black text-slate-900 dark:text-white leading-tight text-xs sm:text-sm">
-                          {client?.company || 'Unknown Company'}
+                          {client?.company || inv.customerName || 'Walk-in / General Customer'}
                         </p>
                         <p className="text-[11px] font-medium text-slate-400 mt-0.5">
-                          {client?.name}
+                          {client?.name || (inv.customerTrn ? `TRN: ${inv.customerTrn}` : '')}
                         </p>
                       </div>
                     </td>
@@ -975,7 +977,9 @@ export const InvoiceList: React.FC<InvoiceListProps> = ({
                     return (
                       <tr key={inv.id}>
                         <td className="py-2 px-3 font-black">{inv.id}</td>
-                        <td className="py-2 px-3 font-bold">{c?.company || c?.name}</td>
+                        <td className="py-2 px-3 font-bold">
+                          {c?.company || c?.name || inv.customerName || 'Walk-in Customer'}
+                        </td>
                         <td className="py-2 px-3">{formatDate(inv.date)}</td>
                         <td className="py-2 px-3">{formatDate(inv.dueDate)}</td>
                         <td className="py-2 px-3 font-bold uppercase">{getEffectiveStatus(inv)}</td>

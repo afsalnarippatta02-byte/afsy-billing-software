@@ -14,6 +14,7 @@ const DATA_DIR = path.join(__dirname, '.data');
 const VAULT_FILE = path.join(DATA_DIR, 'email_cloud_vault.json');
 const VERIFY_FILE = path.join(DATA_DIR, 'email_verifications.json');
 const DRIVE_FILES_FILE = path.join(DATA_DIR, 'drive_backup_files.json');
+const REGISTRY_FILE = path.join(DATA_DIR, 'account_registry.json');
 
 // Ensure data directory exists for multi-device email sync persistence
 if (!fs.existsSync(DATA_DIR)) {
@@ -26,6 +27,97 @@ if (!fs.existsSync(DATA_DIR)) {
 
 interface CloudVaultStore {
   [email: string]: any;
+}
+
+interface AccountRegistry {
+  lastActiveEmail?: string;
+  linkedEmailByUsername: Record<string, string>;
+  users: any[];
+}
+
+function readRegistry(): AccountRegistry {
+  try {
+    if (fs.existsSync(REGISTRY_FILE)) {
+      const raw = fs.readFileSync(REGISTRY_FILE, 'utf-8');
+      const parsed = JSON.parse(raw);
+      return {
+        lastActiveEmail: parsed.lastActiveEmail || '',
+        linkedEmailByUsername: parsed.linkedEmailByUsername || {},
+        users: Array.isArray(parsed.users) ? parsed.users : [],
+      };
+    }
+  } catch (e) {
+    console.warn('Error reading account registry:', e);
+  }
+  return { lastActiveEmail: '', linkedEmailByUsername: {}, users: [] };
+}
+
+function writeRegistry(reg: AccountRegistry): void {
+  try {
+    fs.writeFileSync(REGISTRY_FILE, JSON.stringify(reg, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('Error writing account registry:', e);
+  }
+}
+
+function updateRegistryWithSync(cleanEmail: string, payload?: any, usernameHint?: string): void {
+  if (!cleanEmail || !cleanEmail.includes('@')) return;
+  const reg = readRegistry();
+  reg.lastActiveEmail = cleanEmail;
+  reg.linkedEmailByUsername['admin'] = cleanEmail;
+  if (usernameHint) {
+    reg.linkedEmailByUsername[usernameHint.toLowerCase().trim()] = cleanEmail;
+  }
+
+  if (Array.isArray(payload?.users) && payload.users.length > 0) {
+    const userMap = new Map<string, any>();
+    for (const u of reg.users) {
+      if (u && u.username) userMap.set(u.username.toLowerCase().trim(), u);
+    }
+    for (const u of payload.users) {
+      if (u && u.username) {
+        const key = u.username.toLowerCase().trim();
+        const updatedUser = {
+          ...userMap.get(key),
+          ...u,
+          email: u.email || (key === 'admin' ? cleanEmail : u.email),
+        };
+        userMap.set(key, updatedUser);
+        reg.linkedEmailByUsername[key] = (updatedUser.email || cleanEmail).toLowerCase().trim();
+      }
+    }
+    reg.users = Array.from(userMap.values());
+  }
+  writeRegistry(reg);
+}
+
+// Active SSE clients for instant multi-device change propagation
+type SseClient = {
+  id: string;
+  email: string;
+  res: express.Response;
+};
+const sseClients = new Set<SseClient>();
+
+function broadcastSyncToSseClients(email: string, data: any): void {
+  const cleanEmail = (email || '').toLowerCase().trim();
+  if (!cleanEmail) return;
+  const message = JSON.stringify({
+    type: 'SYNC_UPDATE',
+    email: cleanEmail,
+    updatedAtMs: data?.updatedAtMs || Date.now(),
+    timestamp: data?.lastSyncTime || new Date().toISOString(),
+    data,
+  });
+  for (const client of sseClients) {
+    if (!client.email || client.email === cleanEmail) {
+      try {
+        client.res.write(`data: ${message}\n\n`);
+      } catch {
+        sseClients.delete(client);
+      }
+    }
+  }
 }
 
 interface StoredDriveFileRecord {
@@ -233,6 +325,142 @@ async function startServer() {
   // ============================================================================
   // 1. MULTI-DEVICE EMAIL CLOUD VAULT API (PC & Mobile Unlimited Device Sync)
   // ============================================================================
+  app.get('/api/sync-stream', (req, res) => {
+    const email = String(req.query.email || '').toLowerCase().trim();
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+
+    const client: SseClient = {
+      id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      email,
+      res,
+    };
+    sseClients.add(client);
+
+    const heartbeat = setInterval(() => {
+      try {
+        res.write(': ping\n\n');
+      } catch {
+        clearInterval(heartbeat);
+        sseClients.delete(client);
+      }
+    }, 20000);
+
+    req.on('close', () => {
+      clearInterval(heartbeat);
+      sseClients.delete(client);
+    });
+  });
+
+  app.get('/api/session-bootstrap', (req, res) => {
+    const queryEmail = String(req.query.email || '').toLowerCase().trim();
+    const queryUser = String(req.query.username || '').toLowerCase().trim();
+    const reg = readRegistry();
+    const vault = readVault();
+
+    let resolvedEmail = queryEmail;
+    if (!resolvedEmail && queryUser && reg.linkedEmailByUsername[queryUser]) {
+      resolvedEmail = reg.linkedEmailByUsername[queryUser];
+    }
+    if (!resolvedEmail && reg.lastActiveEmail) {
+      resolvedEmail = reg.lastActiveEmail;
+    }
+    if (!resolvedEmail) {
+      const vaultEmails = Object.keys(vault).filter(k => k.includes('@'));
+      if (vaultEmails.length > 0) {
+        resolvedEmail = vaultEmails[vaultEmails.length - 1];
+      }
+    }
+
+    const record = resolvedEmail ? vault[resolvedEmail] : null;
+    res.json({
+      success: !!resolvedEmail,
+      linkedEmail: resolvedEmail || null,
+      users: reg.users || [],
+      updatedAtMs: record?.updatedAtMs || 0,
+      data: record || null,
+    });
+  });
+
+  app.post('/api/auth/login-sync', (req, res) => {
+    const { identifier, password } = req.body || {};
+    const cleanId = String(identifier || '').toLowerCase().trim();
+    if (!cleanId) {
+      res.status(400).json({ success: false, message: 'Username or email is required.' });
+      return;
+    }
+
+    const reg = readRegistry();
+    const vault = readVault();
+
+    // Collect all known users across registry and vaults
+    const userMap = new Map<string, any>();
+    for (const u of reg.users || []) {
+      if (u?.username) userMap.set(u.username.toLowerCase().trim(), u);
+    }
+    for (const emailKey of Object.keys(vault)) {
+      const vData = vault[emailKey];
+      if (Array.isArray(vData?.users)) {
+        for (const u of vData.users) {
+          if (u?.username) {
+            userMap.set(u.username.toLowerCase().trim(), {
+              ...userMap.get(u.username.toLowerCase().trim()),
+              ...u,
+            });
+          }
+        }
+      }
+    }
+
+    const allUsers = Array.from(userMap.values());
+    let matchedUser = allUsers.find(
+      u =>
+        u.username?.toLowerCase().trim() === cleanId ||
+        (u.email && u.email.toLowerCase().trim() === cleanId)
+    );
+
+    // If user typed their linked Google Drive email directly and it exists in vault
+    if (!matchedUser && cleanId.includes('@') && vault[cleanId]) {
+      const adminUser = allUsers.find(u => u.username?.toLowerCase() === 'admin');
+      if (adminUser && (!password || adminUser.password === password)) {
+        matchedUser = { ...adminUser, email: cleanId };
+      }
+    }
+
+    if (!matchedUser || (password !== undefined && matchedUser.password && matchedUser.password !== password)) {
+      res.status(401).json({
+        success: false,
+        message: 'Invalid username/email or password.',
+      });
+      return;
+    }
+
+    const resolvedEmail = (
+      matchedUser.email ||
+      (cleanId.includes('@') ? cleanId : '') ||
+      reg.linkedEmailByUsername[matchedUser.username?.toLowerCase().trim()] ||
+      reg.lastActiveEmail ||
+      ''
+    )
+      .toLowerCase()
+      .trim();
+
+    if (resolvedEmail) {
+      matchedUser = { ...matchedUser, email: resolvedEmail };
+    }
+
+    const cloudData = resolvedEmail ? vault[resolvedEmail] || null : null;
+    res.json({
+      success: true,
+      user: matchedUser,
+      linkedEmail: resolvedEmail || null,
+      users: allUsers,
+      data: cloudData,
+    });
+  });
+
   app.get('/api/sync/:email', (req, res) => {
     const email = (req.params.email || '').toLowerCase().trim();
     if (!email) {
@@ -252,13 +480,14 @@ async function startServer() {
 
     res.json({
       success: true,
+      updatedAtMs: record.updatedAtMs || new Date(record.lastSyncTime || record.exportedAt || Date.now()).getTime(),
       data: record,
       message: `Synced workspace for ${email} (${record.invoices?.length || 0} invoices, ${record.clients?.length || 0} clients).`,
     });
   });
 
   app.post('/api/sync', (req, res) => {
-    const { email, payload, mode = 'merge' } = req.body || {};
+    const { email, payload, mode = 'replace', username } = req.body || {};
     const cleanEmail = (email || payload?.userEmail || '').toLowerCase().trim();
     if (!cleanEmail || !payload) {
       res.status(400).json({ success: false, message: 'Valid email and payload are required.' });
@@ -267,13 +496,36 @@ async function startServer() {
 
     const vault = readVault();
     const existing = vault[cleanEmail];
-    const nowIso = new Date().toISOString();
+    const nowMs = Date.now();
+    const nowIso = new Date(nowMs).toISOString();
+
+    // When linking a new device (mode === 'link'), if cloud vault already has saved data for this email,
+    // return the authoritative cloud data without overwriting it with the new device's default mock state!
+    if (mode === 'link' && existing) {
+      updateRegistryWithSync(cleanEmail, existing, username);
+      upsertMasterDriveMirrorFile(cleanEmail, existing);
+      res.json({
+        success: true,
+        existedInCloud: true,
+        updatedAtMs: existing.updatedAtMs || nowMs,
+        timestamp: existing.lastSyncTime || nowIso,
+        data: existing,
+        message: `Linked ${cleanEmail} and loaded existing Google Drive workspace (${existing.invoices?.length || 0} invoices, ${existing.clients?.length || 0} clients).`,
+      });
+      return;
+    }
 
     let finalPayload = {
       ...payload,
       userEmail: cleanEmail,
       exportedAt: nowIso,
       lastSyncTime: nowIso,
+      updatedAtMs: nowMs,
+      settings: {
+        ...(payload.settings || {}),
+        driveSyncEmail: cleanEmail,
+        autoDriveSync: true,
+      },
     };
 
     if (existing && mode === 'merge') {
@@ -283,6 +535,7 @@ async function startServer() {
         userEmail: cleanEmail,
         exportedAt: nowIso,
         lastSyncTime: nowIso,
+        updatedAtMs: nowMs,
         invoices: mergeArraysById(existing.invoices, payload.invoices),
         clients: mergeArraysById(existing.clients, payload.clients),
         expenses: mergeArraysById(existing.expenses, payload.expenses),
@@ -290,17 +543,25 @@ async function startServer() {
         staffAdvances: mergeArraysById(existing.staffAdvances, payload.staffAdvances),
         staffAttendance: mergeArraysById(existing.staffAttendance, payload.staffAttendance),
         categories: Array.from(new Set([...(existing.categories || []), ...(payload.categories || [])])),
-        settings: { ...(existing.settings || {}), ...(payload.settings || {}) },
+        settings: {
+          ...(existing.settings || {}),
+          ...(payload.settings || {}),
+          driveSyncEmail: cleanEmail,
+          autoDriveSync: true,
+        },
         users: mergeArraysById(existing.users, payload.users),
       };
     }
 
     vault[cleanEmail] = finalPayload;
     writeVault(vault);
+    updateRegistryWithSync(cleanEmail, finalPayload, username);
     upsertMasterDriveMirrorFile(cleanEmail, finalPayload);
+    broadcastSyncToSseClients(cleanEmail, finalPayload);
 
     res.json({
       success: true,
+      updatedAtMs: nowMs,
       timestamp: nowIso,
       data: finalPayload,
       message: `Synchronized all records across devices for ${cleanEmail}.`,
@@ -322,9 +583,10 @@ async function startServer() {
 
     // Ensure master mirror file appears if vault data exists for this email
     const vault = readVault();
-    if (files.length === 0 && vault[cleanEmail]) {
+    if (vault[cleanEmail]) {
       const masterRecord = upsertMasterDriveMirrorFile(cleanEmail, vault[cleanEmail]);
-      files = [masterRecord];
+      const refreshedStore = readDriveFilesStore();
+      files = refreshedStore[cleanEmail] || [masterRecord];
     }
 
     const metadataOnly = files.map(({ content, ...meta }) => meta);
@@ -344,7 +606,8 @@ async function startServer() {
 
     const store = readDriveFilesStore();
     const list = store[cleanEmail] || [];
-    const nowIso = new Date().toISOString();
+    const nowMs = Date.now();
+    const nowIso = new Date(nowMs).toISOString();
     const safeName =
       fileName ||
       `AfAccounts-Backup-${nowIso.replace(/[:.]/g, '-')}.json`;
@@ -370,7 +633,7 @@ async function startServer() {
       list[existingIdx] = savedRecord;
     } else {
       savedRecord = {
-        id: fileId || `drv_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        id: fileId || `drv_${nowMs}_${Math.random().toString(36).substring(2, 7)}`,
         name: safeName,
         mimeType: 'application/json',
         createdTime: nowIso,
@@ -389,18 +652,28 @@ async function startServer() {
 
     // Also update master vault so all devices stay in sync
     const vault = readVault();
-    vault[cleanEmail] = {
+    const updatedVaultPayload = {
       ...payload,
       userEmail: cleanEmail,
       exportedAt: nowIso,
       lastSyncTime: nowIso,
+      updatedAtMs: nowMs,
+      settings: {
+        ...(payload.settings || {}),
+        driveSyncEmail: cleanEmail,
+        autoDriveSync: true,
+      },
     };
+    vault[cleanEmail] = updatedVaultPayload;
     writeVault(vault);
+    updateRegistryWithSync(cleanEmail, updatedVaultPayload);
+    broadcastSyncToSseClients(cleanEmail, updatedVaultPayload);
 
     const { content, ...meta } = savedRecord;
     res.json({
       success: true,
       file: meta,
+      updatedAtMs: nowMs,
       message: `Saved backup "${safeName}" to Google Drive Cloud Vault.`,
     });
   });

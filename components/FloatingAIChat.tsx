@@ -4,7 +4,6 @@ import {
   X,
   Maximize2,
   Minimize2,
-  Move,
   Sliders,
   RotateCcw
 } from 'lucide-react';
@@ -250,13 +249,6 @@ const FloatingAIChat: React.FC<FloatingAIChatProps> = ({
                 </span>
               </div>
             )}
-
-            {aiDraggable && aiButtonStyle !== 'icon' && (
-              <Move
-                size={12}
-                className="text-white/60 group-hover:text-white transition-colors ml-0.5"
-              />
-            )}
           </button>
 
           {/* Quick Customize Trigger on Hover */}
@@ -267,7 +259,7 @@ const FloatingAIChat: React.FC<FloatingAIChatProps> = ({
               setIsOpen(true);
               setShowCustomize(true);
             }}
-            title="Customize or Move AI Tool"
+            title="Customize AI Tool"
             className="opacity-0 group-hover:opacity-100 ml-1.5 w-7 h-7 rounded-full bg-slate-900/90 text-white border border-white/20 shadow-lg flex items-center justify-center transition-all hover:scale-110"
           >
             <Sliders size={12} />
@@ -281,7 +273,7 @@ const FloatingAIChat: React.FC<FloatingAIChatProps> = ({
               : 'w-[92vw] sm:w-[450px] h-[560px]'
           }`}
         >
-          {/* Draggable Header Controls */}
+          {/* Header Controls */}
           <div
             onMouseDown={e => {
               if ((e.target as HTMLElement).closest('button')) return;
@@ -291,22 +283,13 @@ const FloatingAIChat: React.FC<FloatingAIChatProps> = ({
               if ((e.target as HTMLElement).closest('button')) return;
               if (e.touches[0]) startDrag(e.touches[0].clientX, e.touches[0].clientY);
             }}
-            className={`bg-slate-950 text-white px-4 py-2.5 flex items-center justify-between border-b border-slate-800 ${
-              aiDraggable ? 'cursor-grab active:cursor-grabbing' : ''
-            }`}
-            title={aiDraggable ? 'Drag header to move AI window anywhere on screen' : ''}
+            className="bg-slate-950 text-white px-4 py-2.5 flex items-center justify-between border-b border-slate-800"
           >
             <div className="flex items-center space-x-2 min-w-0">
               <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0"></span>
               <span className="text-xs font-black uppercase tracking-wider text-slate-200 truncate">
                 Af© AI Advisor
               </span>
-              {aiDraggable && (
-                <span className="hidden sm:inline-flex items-center space-x-1 text-[10px] font-bold text-slate-400 bg-slate-900 px-2 py-0.5 rounded-md border border-slate-800">
-                  <Move size={10} />
-                  <span>Drag to Move</span>
-                </span>
-              )}
             </div>
 
             <div className="flex items-center space-x-1 shrink-0">

@@ -1,5 +1,11 @@
 
 export enum ProjectType {
+  GENERAL = 'General',
+  GOODS_SUPPLY = 'Goods & Trading',
+  SERVICES = 'Services',
+  CONSULTING = 'Consulting',
+  CONTRACTING = 'Contracting & Maintenance',
+  IT_SOFTWARE = 'IT & Software',
   VIDEO_PRODUCTION = 'Video Production',
   PRODUCT_SHOOT = 'Product Shoot',
   AD_CAMPAIGN = 'Ad Campaign',
@@ -118,9 +124,10 @@ export interface StaffAttendanceRecord {
 export interface LineItem {
   id: string;
   description: string;
-  serviceType: ProjectType;
+  serviceType?: ProjectType | string;
   category?: string;
   service?: string;
+  unit?: string;
   quantity: number;
   rate: number;
 }
@@ -128,6 +135,13 @@ export interface LineItem {
 export interface Invoice {
   id: string;
   clientId: string;
+  poNumber?: string;
+  customerName?: string;
+  customerCompany?: string;
+  customerTrn?: string;
+  customerAddress?: string;
+  customerPhone?: string;
+  customerEmail?: string;
   date: string;
   dueDate: string;
   status: InvoiceStatus;
@@ -138,9 +152,14 @@ export interface Invoice {
   currency: string;
   discount: number;
   paymentMethod?: PaymentMethod;
+  paymentTerms?: string;
+  paymentTermsDays?: number;
+  showPaymentTerms?: boolean;
   paymentDate?: string;
   includeSignature?: boolean;
   includeSeal?: boolean;
+  showRemarks?: boolean;
+  showAmountInWords?: boolean;
 }
 
 export interface Expense {
@@ -205,6 +224,8 @@ export interface CompanySettings {
   beneficiaryName?: string;
   iban?: string;
   invoiceTemplate?:
+    | 'personal_neat_custom'
+    | 'uae_standard_simple'
     | 'executive_indigo'
     | 'emirates_gold'
     | 'dubai_minimal'
@@ -218,8 +239,15 @@ export interface CompanySettings {
   invoiceTableStyle?: 'striped' | 'bordered' | 'minimal';
   invoiceFontStyle?: 'sans' | 'serif' | 'mono';
   invoiceCustomTitle?: string;
+  invoiceSubtitle?: string;
+  invoiceDefaultPaymentTerms?: string;
+  invoiceShowPaymentTerms?: boolean;
+  invoiceShowSignatures?: boolean;
   invoiceShowCategoryCol?: boolean;
   invoiceShowBankDetails?: boolean;
+  invoiceShowRemarks?: boolean;
+  invoiceShowAmountInWords?: boolean;
+  invoiceShowFooterNote?: boolean;
   invoiceCompactMode?: boolean;
   statementTemplate?:
     | 'standard_audit'
@@ -239,6 +267,44 @@ export interface CompanySettings {
   statementCompactMode?: boolean;
   statementDefaultView?: 'date_wise' | 'month_wise' | 'category_wise';
   statementDefaultOrientation?: 'portrait' | 'landscape';
+  // Overdue Invoices Automated Email Reminders Settings
+  autoRemindersEnabled?: boolean;
+  reminderFrequency?: ReminderFrequencyOption;
+  reminderCustomIntervalDays?: number;
+  reminderSendBeforeDue?: boolean;
+  reminderBeforeDueDays?: number;
+  reminderSendOnDueDate?: boolean;
+  reminderMaxCountPerInvoice?: number;
+  reminderMinBalanceThreshold?: number;
+  reminderSenderName?: string;
+  reminderReplyToEmail?: string;
+  reminderCcAccountsEmail?: string;
+  reminderTemplates?: ReminderTemplate[];
+  reminderLogs?: ReminderLogEntry[];
+}
+
+export type ReminderFrequencyOption = 'daily' | 'every_3_days' | 'weekly' | 'biweekly' | 'tiered_intervals' | 'custom_days';
+
+export interface ReminderTemplate {
+  id: string; // 'gentle' | 'first_overdue' | 'urgent' | 'final_demand'
+  name: string;
+  stageLabel: string;
+  daysThreshold: number;
+  subject: string;
+  body: string;
+  tone: 'gentle' | 'polite' | 'urgent' | 'legal';
+  enabled: boolean;
+}
+
+export interface ReminderLogEntry {
+  id: string;
+  invoiceId: string;
+  clientName: string;
+  clientEmail: string;
+  sentDate: string;
+  templateId: string;
+  daysOverdue: number;
+  amount: number;
 }
 
 export type View = 'dashboard' | 'invoices' | 'clients' | 'statements' | 'expenses' | 'staff' | 'ai-helper' | 'settings';
@@ -268,6 +334,8 @@ export interface ChatRolePreset {
 export interface AppBackupPayload {
   version: string;
   exportedAt: string;
+  lastSyncTime?: string;
+  updatedAtMs?: number;
   userEmail?: string;
   invoices: Invoice[];
   clients: Client[];

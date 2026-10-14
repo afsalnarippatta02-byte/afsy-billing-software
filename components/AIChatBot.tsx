@@ -301,7 +301,7 @@ const AIChatBot: React.FC<AIChatBotProps> = ({
       <div className="bg-slate-900 text-white p-5 border-b border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center space-x-3.5">
           <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center text-white shadow-lg shadow-indigo-500/30">
-            <Sparkles size={20} className="animate-pulse" />
+            <Sparkles size={20} />
           </div>
           <div>
             <div className="flex items-center space-x-2">

@@ -1,7 +1,6 @@
 import React from 'react';
 import {
   Sparkles,
-  Move,
   Sliders,
   Eye,
   EyeOff,
@@ -49,19 +48,19 @@ export const AICustomizationPanel: React.FC<AICustomizationPanelProps> = ({
 
   return (
     <div className={compact ? 'space-y-4 text-xs' : 'space-y-6'}>
-      {/* 1. Manual Move & Screen Position Section */}
+      {/* 1. Screen Position Section */}
       <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 sm:p-5 space-y-4 shadow-xs">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center space-x-2.5">
             <div className="w-9 h-9 rounded-xl bg-indigo-50 dark:bg-indigo-950/80 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
-              <Move size={18} />
+              <Layout size={18} />
             </div>
             <div>
               <h4 className="text-sm font-black text-slate-900 dark:text-white">
-                Manual Move &amp; Screen Position
+                Screen Position
               </h4>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                Drag the AI button or chat header anywhere on screen, or snap to a corner.
+                Choose the corner position for the AI assistant button.
               </p>
             </div>
           </div>
@@ -75,8 +74,8 @@ export const AICustomizationPanel: React.FC<AICustomizationPanelProps> = ({
                 : 'bg-slate-100 dark:bg-slate-800 text-slate-500 border-slate-200 dark:border-slate-700'
             }`}
           >
-            <Move size={12} />
-            <span>{aiDraggable ? 'Manual Drag: ON' : 'Position Locked'}</span>
+            <Layout size={12} />
+            <span>{aiDraggable ? 'Flexible Position' : 'Position Locked'}</span>
           </button>
         </div>
 

@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 import {
   Lock,
   User,
@@ -9,8 +9,7 @@ import {
   CheckCircle2,
   AlertCircle,
   ArrowLeft,
-  ShieldCheck,
-  KeyRound
+  Cloud
 } from 'lucide-react';
 import { UserAccount, UserRole } from '../types';
 import { AfLogo } from './AfLogo';
@@ -20,12 +19,14 @@ import {
   DEFAULT_ADMIN_PERMISSIONS
 } from '../services/userService';
 import {
-  pullFromCloudAndDriveByEmail,
-  requestEmailVerificationCode,
-  confirmEmailVerificationCode,
+  linkAndSyncGoogleDriveEmail,
+  bootstrapSessionFromCloud,
+  syncToGoogleDriveCloud,
+  applyBackupPayload,
+  setLinkedDriveAccount,
   markEmailVerified
 } from '../services/driveService';
-import { signInWithGoogleDrive } from '../services/googleDriveAuth';
+import { signInWithGoogleDrive, linkGoogleDriveAccountByEmail } from '../services/googleDriveAuth';
 import { LanguageCode, getTranslation } from '../utils/translations';
 
 interface LoginProps {
@@ -42,7 +43,7 @@ export const Login: React.FC<LoginProps> = ({
   onUpdateUsers,
   language = 'en'
 }) => {
-  const [mode, setMode] = useState<'LOGIN' | 'EMAIL_VERIFY' | 'REGISTER' | 'RESET'>('LOGIN');
+  const [mode, setMode] = useState<'LOGIN' | 'DRIVE_LINK' | 'REGISTER' | 'RESET'>('LOGIN');
 
   // Sign In State
   const [identifier, setIdentifier] = useState('');
@@ -52,19 +53,8 @@ export const Login: React.FC<LoginProps> = ({
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
-  // 4-Digit Email Verification State
-  const [verifyEmail, setVerifyEmail] = useState('');
-  const [codeStep, setCodeStep] = useState<'request' | 'confirm'>('request');
-  const [digits, setDigits] = useState<[string, string, string, string]>(['', '', '', '']);
-  const [dispatchedCode, setDispatchedCode] = useState('');
-  const [pendingUserAfterVerify, setPendingUserAfterVerify] = useState<UserAccount | null>(null);
-
-  const digitRefs = [
-    useRef<HTMLInputElement>(null),
-    useRef<HTMLInputElement>(null),
-    useRef<HTMLInputElement>(null),
-    useRef<HTMLInputElement>(null)
-  ];
+  // Direct Google Drive Email Link State (No 4-Digit PIN/OTP)
+  const [driveEmail, setDriveEmail] = useState('');
 
   // Simple Create Account State
   const [regName, setRegName] = useState('');
@@ -77,7 +67,7 @@ export const Login: React.FC<LoginProps> = ({
 
   const t = (key: string, fallback?: string) => getTranslation(language, key, fallback);
 
-  // 1. Standard Sign In
+  // 1. Standard Sign In (Auto-discovers linked Google Drive & syncs data across devices)
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -86,6 +76,39 @@ export const Login: React.FC<LoginProps> = ({
     const activeList = Array.isArray(users) && users.length > 0 ? users : loadStoredUsers();
     const cleanId = identifier.trim().toLowerCase();
 
+    // Try server cross-device login sync first so accounts & linked Google Drive emails from other devices work seamlessly
+    try {
+      if (typeof navigator === 'undefined' || navigator.onLine) {
+        const res = await fetch('/api/auth/login-sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ identifier: cleanId, password }),
+        });
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && json.user) {
+            if (Array.isArray(json.users) && json.users.length > 0) {
+              saveStoredUsers(json.users);
+              if (onUpdateUsers) onUpdateUsers(json.users);
+            }
+            if (json.linkedEmail) {
+              markEmailVerified(json.linkedEmail);
+              setLinkedDriveAccount(json.linkedEmail);
+              linkGoogleDriveAccountByEmail(json.linkedEmail, json.user.name);
+            }
+            if (json.data) {
+              applyBackupPayload(json.data, 'replace');
+            }
+            setIsLoading(false);
+            onLogin(json.user);
+            return;
+          }
+        }
+      }
+    } catch {
+      // Fallback to local verification below
+    }
+
     const matched = (activeList || []).find(
       u =>
         u.username.toLowerCase() === cleanId ||
@@ -93,66 +116,39 @@ export const Login: React.FC<LoginProps> = ({
     );
 
     if (matched && matched.password === password) {
-      if (matched.email) {
-        pullFromCloudAndDriveByEmail(matched.email, 'merge').catch(() => {});
+      let accountToLogin = { ...matched };
+      const booted = await bootstrapSessionFromCloud(matched.email, matched.username);
+      if (booted.linkedEmail && !accountToLogin.email) {
+        accountToLogin.email = booted.linkedEmail;
+      }
+      if (accountToLogin.email) {
+        await linkAndSyncGoogleDriveEmail(accountToLogin.email, accountToLogin.username).catch(() => {});
       }
       setIsLoading(false);
-      onLogin(matched);
+      onLogin(accountToLogin);
     } else {
       setIsLoading(false);
       setError('Invalid username/email or password.');
     }
   };
 
-  // 2. Request 4-Digit Verification Code for Email Login / Registration
-  const handleSend4DigitCode = async (targetEmailInput?: string) => {
-    const cleanEmail = (targetEmailInput || verifyEmail).trim().toLowerCase();
+  // 2. Direct Google Drive Email Link & Auto-Sync Login (No 4-Pin OTP)
+  const handleDirectDriveEmailLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanEmail = driveEmail.trim().toLowerCase();
     if (!cleanEmail || !cleanEmail.includes('@')) {
-      setError('Please enter a valid Email ID (e.g. user@company.com).');
+      setError('Please enter a valid Google Drive Email ID (e.g. yourname@gmail.com).');
       return;
     }
 
     setError('');
     setIsLoading(true);
     try {
-      const res = await requestEmailVerificationCode(cleanEmail);
-      if (res.success) {
-        setVerifyEmail(cleanEmail);
-        setDigits(['', '', '', '']);
-        setDispatchedCode(res.dispatchCode || '');
-        setCodeStep('confirm');
-        setMode('EMAIL_VERIFY');
-        setSuccessMsg(`4-digit verification code sent for ${cleanEmail}.`);
-        setTimeout(() => digitRefs[0].current?.focus(), 80);
-      } else {
-        setError(res.message);
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // Confirm 4-Digit Code & Auto-Mirror Google Drive + Sign In
-  const handleConfirm4DigitCode = async (codeToVerify: string) => {
-    const cleanEmail = verifyEmail.trim().toLowerCase();
-    if (codeToVerify.length !== 4) return;
-
-    setError('');
-    setIsLoading(true);
-    try {
-      const res = await confirmEmailVerificationCode(cleanEmail, codeToVerify);
-      if (!res.success || !res.verified) {
-        setError(res.message || 'Incorrect 4-digit verification code.');
-        setIsLoading(false);
-        return;
-      }
-
+      const syncRes = await linkAndSyncGoogleDriveEmail(cleanEmail);
       const activeList = Array.isArray(users) && users.length > 0 ? users : loadStoredUsers();
-      let account =
-        pendingUserAfterVerify ||
-        activeList.find(
-          u => u.email?.toLowerCase() === cleanEmail || u.username.toLowerCase() === cleanEmail
-        );
+      let account = activeList.find(
+        u => u.email?.toLowerCase() === cleanEmail || u.username.toLowerCase() === cleanEmail
+      );
 
       if (!account) {
         account = {
@@ -164,56 +160,21 @@ export const Login: React.FC<LoginProps> = ({
           permissions: DEFAULT_ADMIN_PERMISSIONS,
           createdAt: new Date().toISOString().split('T')[0]
         };
-      }
-
-      if (!activeList.some(u => u.id === account!.id)) {
         const updated = [...activeList, account];
         saveStoredUsers(updated);
         if (onUpdateUsers) onUpdateUsers(updated);
+      } else if (!account.email) {
+        account = { ...account, email: cleanEmail };
       }
 
+      if (syncRes.data) {
+        applyBackupPayload(syncRes.data, 'replace');
+      }
       setIsLoading(false);
       onLogin(account);
     } catch (err: any) {
       setIsLoading(false);
-      setError(err?.message || 'Verification failed.');
-    }
-  };
-
-  const handleDigitInput = (index: number, value: string) => {
-    const numeric = value.replace(/[^0-9]/g, '');
-    if (!numeric) {
-      const next = [...digits] as [string, string, string, string];
-      next[index] = '';
-      setDigits(next);
-      return;
-    }
-
-    if (numeric.length >= 4) {
-      const four: [string, string, string, string] = [
-        numeric[0],
-        numeric[1],
-        numeric[2],
-        numeric[3]
-      ];
-      setDigits(four);
-      digitRefs[3].current?.focus();
-      handleConfirm4DigitCode(four.join(''));
-      return;
-    }
-
-    const d = numeric[numeric.length - 1];
-    const next = [...digits] as [string, string, string, string];
-    next[index] = d;
-    setDigits(next);
-
-    if (index < 3) {
-      digitRefs[index + 1].current?.focus();
-    }
-
-    const joined = next.join('');
-    if (joined.length === 4 && next.every(x => x.length === 1)) {
-      handleConfirm4DigitCode(joined);
+      setError(err?.message || 'Could not link Google Drive account.');
     }
   };
 
@@ -226,7 +187,7 @@ export const Login: React.FC<LoginProps> = ({
       if (res?.user) {
         const gEmail = (res.user.email || '').toLowerCase().trim();
         if (gEmail) {
-          markEmailVerified(gEmail);
+          await linkAndSyncGoogleDriveEmail(gEmail, res.user.displayName || undefined);
         }
         const activeList = Array.isArray(users) && users.length > 0 ? users : loadStoredUsers();
         let account = activeList.find(
@@ -248,20 +209,22 @@ export const Login: React.FC<LoginProps> = ({
           if (onUpdateUsers) onUpdateUsers(updated);
         }
 
-        if (gEmail) {
-          await pullFromCloudAndDriveByEmail(gEmail, 'merge').catch(() => {});
-        }
         setIsLoading(false);
         onLogin(account);
         return;
       }
-    } catch (err: any) {
-      setError(err?.message || 'Google sign-in was cancelled.');
+    } catch {
+      // If popup was blocked by browser/iframe, switch to direct Google Drive Email Link mode
+      setIsLoading(false);
+      setDriveEmail(identifier.includes('@') ? identifier : '');
+      setMode('DRIVE_LINK');
+      setSuccessMsg('Enter your Google Drive Email below to link your account and auto-sync all devices.');
+      return;
     }
     setIsLoading(false);
   };
 
-  // 4. Create Account (Triggers 4-Digit Verification if Email is provided)
+  // 4. Create Account (Direct Registration & Auto-Link without 4-Digit OTP)
   const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -286,6 +249,7 @@ export const Login: React.FC<LoginProps> = ({
       return;
     }
 
+    setIsLoading(true);
     const newUser: UserAccount = {
       id: `u-${Date.now()}`,
       username: cleanUsername,
@@ -297,20 +261,20 @@ export const Login: React.FC<LoginProps> = ({
       createdAt: new Date().toISOString().split('T')[0]
     };
 
-    if (isEmail) {
-      setPendingUserAfterVerify(newUser);
-      await handleSend4DigitCode(cleanInput);
-      return;
-    }
-
     const updatedUsers = [...activeList, newUser];
     saveStoredUsers(updatedUsers);
     if (onUpdateUsers) onUpdateUsers(updatedUsers);
+
+    if (isEmail) {
+      await linkAndSyncGoogleDriveEmail(cleanInput, newUser.username).catch(() => {});
+    }
+
+    setIsLoading(false);
     onLogin(newUser);
   };
 
   // 5. Simple Password Reset
-  const handleResetSubmit = (e: React.FormEvent) => {
+  const handleResetSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setSuccessMsg('');
@@ -337,6 +301,9 @@ export const Login: React.FC<LoginProps> = ({
     );
     saveStoredUsers(updatedUsers);
     if (onUpdateUsers) onUpdateUsers(updatedUsers);
+    if (found.email) {
+      await syncToGoogleDriveCloud(found.email, undefined, 'replace').catch(() => {});
+    }
 
     setSuccessMsg('Password updated. You can now sign in.');
     setMode('LOGIN');
@@ -359,8 +326,8 @@ export const Login: React.FC<LoginProps> = ({
             <p className="text-xs text-slate-500 dark:text-slate-400">
               {mode === 'LOGIN'
                 ? 'Sign in to your account'
-                : mode === 'EMAIL_VERIFY'
-                ? '4-Digit Email Verification & Drive Sync'
+                : mode === 'DRIVE_LINK'
+                ? 'Link Google Drive & Auto-Sync Devices'
                 : mode === 'REGISTER'
                 ? 'Create a new account'
                 : 'Reset your password'}
@@ -402,7 +369,7 @@ export const Login: React.FC<LoginProps> = ({
                   required
                   value={identifier}
                   onChange={e => setIdentifier(e.target.value)}
-                  placeholder="Enter username or email"
+                  placeholder="Enter username or linked email"
                   className="w-full pl-10 pr-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
@@ -459,21 +426,6 @@ export const Login: React.FC<LoginProps> = ({
             <div className="grid grid-cols-1 gap-2">
               <button
                 type="button"
-                onClick={() => {
-                  setError('');
-                  setSuccessMsg('');
-                  setVerifyEmail(identifier.includes('@') ? identifier : '');
-                  setCodeStep('request');
-                  setMode('EMAIL_VERIFY');
-                }}
-                className="w-full py-2.5 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 font-bold text-xs rounded-xl transition-colors flex items-center justify-center gap-2"
-              >
-                <KeyRound size={14} />
-                <span>Verify Email with 4-Digit Code &amp; Sync</span>
-              </button>
-
-              <button
-                type="button"
                 onClick={handleGoogleLogin}
                 disabled={isLoading}
                 className="w-full py-2.5 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 font-semibold text-xs rounded-xl transition-colors flex items-center justify-center gap-2"
@@ -496,7 +448,21 @@ export const Login: React.FC<LoginProps> = ({
                     d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
                   />
                 </svg>
-                <span>Continue with Google</span>
+                <span>Continue with Google Drive</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setError('');
+                  setSuccessMsg('');
+                  setDriveEmail(identifier.includes('@') ? identifier : '');
+                  setMode('DRIVE_LINK');
+                }}
+                className="w-full py-2.5 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 font-bold text-xs rounded-xl transition-colors flex items-center justify-center gap-2"
+              >
+                <Cloud size={14} />
+                <span>Sign In with Linked Google Drive Email</span>
               </button>
             </div>
 
@@ -516,119 +482,55 @@ export const Login: React.FC<LoginProps> = ({
         )}
 
         {/* ================================================================= */}
-        {/* VIEW 2: 4-DIGIT EMAIL VERIFICATION & GOOGLE DRIVE MIRROR          */}
+        {/* VIEW 2: DIRECT GOOGLE DRIVE EMAIL LINK & MULTI-DEVICE SYNC        */}
         {/* ================================================================= */}
-        {mode === 'EMAIL_VERIFY' && (
+        {mode === 'DRIVE_LINK' && (
           <div className="space-y-4">
-            {codeStep === 'request' ? (
-              <form
-                onSubmit={e => {
-                  e.preventDefault();
-                  handleSend4DigitCode(verifyEmail);
-                }}
-                className="space-y-4"
-              >
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
-                    Email ID
-                  </label>
-                  <div className="relative">
-                    <Mail
-                      size={16}
-                      className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"
-                    />
-                    <input
-                      type="email"
-                      required
-                      value={verifyEmail}
-                      onChange={e => setVerifyEmail(e.target.value)}
-                      placeholder="user@company.com"
-                      className="w-full pl-10 pr-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
-                    />
-                  </div>
+            <form onSubmit={handleDirectDriveEmailLogin} className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
+                  Google Drive Email ID
+                </label>
+                <div className="relative">
+                  <Mail
+                    size={16}
+                    className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"
+                  />
+                  <input
+                    type="email"
+                    required
+                    value={driveEmail}
+                    onChange={e => setDriveEmail(e.target.value)}
+                    placeholder="yourname@gmail.com"
+                    className="w-full pl-10 pr-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
                 </div>
-
-                <button
-                  type="submit"
-                  disabled={isLoading}
-                  className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm rounded-xl transition-colors flex items-center justify-center gap-2"
-                >
-                  {isLoading ? (
-                    <Loader2 size={16} className="animate-spin" />
-                  ) : (
-                    <span>Send 4-Digit Verification Code</span>
-                  )}
-                </button>
-              </form>
-            ) : (
-              <div className="space-y-4">
-                {dispatchedCode && (
-                  <div className="p-3 rounded-xl bg-slate-900 text-white flex items-center justify-between">
-                    <div>
-                      <span className="text-[10px] font-black uppercase tracking-wider text-indigo-400 block">
-                        4-Digit Verification Code
-                      </span>
-                      <strong className="text-base font-black tracking-[0.25em] text-amber-300">
-                        {dispatchedCode}
-                      </strong>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const four: [string, string, string, string] = [
-                          dispatchedCode[0],
-                          dispatchedCode[1],
-                          dispatchedCode[2],
-                          dispatchedCode[3]
-                        ];
-                        setDigits(four);
-                        handleConfirm4DigitCode(dispatchedCode);
-                      }}
-                      className="px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-black"
-                    >
-                      Auto-Fill
-                    </button>
-                  </div>
-                )}
-
-                <div className="flex items-center justify-center gap-2.5">
-                  {[0, 1, 2, 3].map(idx => (
-                    <input
-                      key={idx}
-                      ref={digitRefs[idx]}
-                      type="text"
-                      inputMode="numeric"
-                      maxLength={4}
-                      value={digits[idx]}
-                      onChange={e => handleDigitInput(idx, e.target.value)}
-                      onKeyDown={e => {
-                        if (e.key === 'Backspace' && !digits[idx] && idx > 0) {
-                          digitRefs[idx - 1].current?.focus();
-                        }
-                      }}
-                      className="w-13 h-14 text-center text-xl font-black rounded-xl bg-slate-50 dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:border-indigo-600 outline-none"
-                    />
-                  ))}
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => handleConfirm4DigitCode(digits.join(''))}
-                  disabled={isLoading || digits.join('').length !== 4}
-                  className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-sm rounded-xl transition-colors flex items-center justify-center gap-2"
-                >
-                  <ShieldCheck size={16} />
-                  <span>{isLoading ? 'Verifying & Mirroring...' : 'Verify 4-Digit Code'}</span>
-                </button>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                  Enter the Google Drive email linked to your workspace. All saved invoices, clients, expenses, and settings will automatically load and stay synced across all your devices.
+                </p>
               </div>
-            )}
+
+              <button
+                type="submit"
+                disabled={isLoading}
+                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm rounded-xl transition-colors flex items-center justify-center gap-2"
+              >
+                {isLoading ? (
+                  <Loader2 size={16} className="animate-spin" />
+                ) : (
+                  <>
+                    <Cloud size={16} />
+                    <span>Link Google Drive &amp; Sign In</span>
+                  </>
+                )}
+              </button>
+            </form>
 
             <button
               type="button"
               onClick={() => {
                 setError('');
                 setSuccessMsg('');
-                setPendingUserAfterVerify(null);
                 setMode('LOGIN');
               }}
               className="w-full py-2 text-xs font-semibold text-slate-500 hover:text-slate-800 dark:hover:text-white flex items-center justify-center gap-1"
@@ -660,7 +562,7 @@ export const Login: React.FC<LoginProps> = ({
 
             <div className="space-y-1.5">
               <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
-                Email or Username
+                Google Drive Email or Username
               </label>
               <div className="relative">
                 <Mail
@@ -672,7 +574,7 @@ export const Login: React.FC<LoginProps> = ({
                   required
                   value={regEmailOrUser}
                   onChange={e => setRegEmailOrUser(e.target.value)}
-                  placeholder="user@company.com"
+                  placeholder="yourname@gmail.com"
                   className="w-full pl-10 pr-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
@@ -697,7 +599,7 @@ export const Login: React.FC<LoginProps> = ({
               disabled={isLoading}
               className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-sm rounded-xl transition-colors"
             >
-              {isLoading ? 'Processing...' : 'Create Account & Verify'}
+              {isLoading ? 'Creating & Syncing...' : 'Create Account'}
             </button>
 
             <button

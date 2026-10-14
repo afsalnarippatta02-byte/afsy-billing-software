@@ -1,22 +1,18 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Mail,
-  ShieldCheck,
   CheckCircle2,
   RefreshCw,
   HardDrive,
   Share2,
   X,
-  KeyRound,
   AlertCircle,
   Cloud,
-  Sparkles,
   ArrowRight
 } from 'lucide-react';
 import {
-  requestEmailVerificationCode,
-  confirmEmailVerificationCode,
-  isEmailVerified,
+  linkAndSyncGoogleDriveEmail,
+  pullFromCloudAndDriveByEmail,
   shareLocalDataOffline,
   AppBackupPayload
 } from '../services/driveService';
@@ -43,87 +39,50 @@ export const EmailVerificationModal: React.FC<EmailVerificationModalProps> = ({
   isSyncingExternal = false
 }) => {
   const [emailInput, setEmailInput] = useState(initialEmail || '');
-  const [step, setStep] = useState<'enter-email' | 'enter-code' | 'verified'>(() =>
-    initialEmail && isEmailVerified(initialEmail) ? 'verified' : 'enter-email'
-  );
-  const [digits, setDigits] = useState<[string, string, string, string]>(['', '', '', '']);
-  const [dispatchedCode, setDispatchedCode] = useState<string>('');
+  const [isEditingEmail, setIsEditingEmail] = useState<boolean>(!initialEmail);
   const [isLoading, setIsLoading] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
-
-  const inputRefs = [
-    useRef<HTMLInputElement>(null),
-    useRef<HTMLInputElement>(null),
-    useRef<HTMLInputElement>(null),
-    useRef<HTMLInputElement>(null)
-  ];
 
   useEffect(() => {
     if (isOpen) {
       const clean = (initialEmail || '').trim().toLowerCase();
       setEmailInput(clean);
-      if (clean && isEmailVerified(clean)) {
-        setStep('verified');
-      } else {
-        setStep('enter-email');
-      }
+      setIsEditingEmail(!clean);
       setStatusMsg(null);
     }
   }, [isOpen, initialEmail]);
 
   if (!isOpen) return null;
 
-  const handleSend4DigitCode = async (e?: React.FormEvent) => {
+  const handleDirectLinkEmail = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const clean = emailInput.trim().toLowerCase();
     if (!clean || !clean.includes('@')) {
       setStatusMsg({
         type: 'error',
-        text: 'Please enter a valid Email ID (e.g. user@company.com).'
+        text: 'Please enter a valid Google Drive Email ID (e.g. yourname@gmail.com).'
       });
       return;
     }
 
     setIsLoading(true);
-    setStatusMsg(null);
+    setStatusMsg({
+      type: 'info',
+      text: `Linking ${clean} and syncing Google Drive workspace across all devices...`
+    });
     try {
-      const res = await requestEmailVerificationCode(clean);
+      const res = await linkAndSyncGoogleDriveEmail(clean);
       if (res.success) {
-        setDigits(['', '', '', '']);
-        setDispatchedCode(res.dispatchCode || '');
-        setStep('enter-code');
-        setStatusMsg({
-          type: 'info',
-          text: `A 4-digit verification code has been generated for ${clean}. Enter the 4 digits below to verify and activate automatic Google Drive mirroring.`
-        });
-        setTimeout(() => inputRefs[0].current?.focus(), 80);
-      } else {
-        setStatusMsg({ type: 'error', text: res.message });
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const verify4DigitCode = async (codeStr: string) => {
-    const clean = emailInput.trim().toLowerCase();
-    if (codeStr.length !== 4) return;
-
-    setIsLoading(true);
-    setStatusMsg(null);
-    try {
-      const res = await confirmEmailVerificationCode(clean, codeStr);
-      if (res.success && res.verified) {
-        setStep('verified');
+        setIsEditingEmail(false);
         setStatusMsg({
           type: 'success',
-          text: res.message
+          text: res.message || `Linked ${clean}! All changes now auto-save to Google Drive and sync across all linked devices.`
         });
         onVerifiedAndMirrored(clean, res.data);
       } else {
         setStatusMsg({
           type: 'error',
-          text: res.message || 'Invalid 4-digit verification code. Please try again.'
+          text: res.message || 'Could not link Google Drive email.'
         });
       }
     } finally {
@@ -131,60 +90,24 @@ export const EmailVerificationModal: React.FC<EmailVerificationModalProps> = ({
     }
   };
 
-  const handleDigitChange = (index: number, value: string) => {
-    const numeric = value.replace(/[^0-9]/g, '');
-    if (!numeric) {
-      const next = [...digits] as [string, string, string, string];
-      next[index] = '';
-      setDigits(next);
-      return;
-    }
-
-    // Support pasting all 4 digits at once
-    if (numeric.length >= 4) {
-      const four: [string, string, string, string] = [
-        numeric[0],
-        numeric[1],
-        numeric[2],
-        numeric[3]
-      ];
-      setDigits(four);
-      inputRefs[3].current?.focus();
-      verify4DigitCode(four.join(''));
-      return;
-    }
-
-    const digit = numeric[numeric.length - 1];
-    const next = [...digits] as [string, string, string, string];
-    next[index] = digit;
-    setDigits(next);
-
-    if (index < 3) {
-      inputRefs[index + 1].current?.focus();
-    }
-
-    const joined = next.join('');
-    if (joined.length === 4 && next.every(d => d.length === 1)) {
-      verify4DigitCode(joined);
-    }
-  };
-
-  const handleKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Backspace' && !digits[index] && index > 0) {
-      inputRefs[index - 1].current?.focus();
-    }
-  };
-
-  const handleAutoFillCode = () => {
-    if (dispatchedCode.length === 4) {
-      const four: [string, string, string, string] = [
-        dispatchedCode[0],
-        dispatchedCode[1],
-        dispatchedCode[2],
-        dispatchedCode[3]
-      ];
-      setDigits(four);
-      verify4DigitCode(dispatchedCode);
+  const handlePullLatest = async () => {
+    const clean = (emailInput || initialEmail || '').trim().toLowerCase();
+    if (!clean || !clean.includes('@')) return;
+    setIsLoading(true);
+    setStatusMsg({ type: 'info', text: `Pulling latest saved data from Google Drive (${clean})...` });
+    try {
+      const res = await pullFromCloudAndDriveByEmail(clean, 'replace');
+      if (res.success && res.data) {
+        onVerifiedAndMirrored(clean, res.data);
+        setStatusMsg({
+          type: 'success',
+          text: res.message || `Loaded latest workspace from Google Drive (${clean})!`
+        });
+      } else {
+        setStatusMsg({ type: 'error', text: res.message });
+      }
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -196,21 +119,21 @@ export const EmailVerificationModal: React.FC<EmailVerificationModalProps> = ({
           <div className="flex items-center space-x-3">
             <div
               className={`w-11 h-11 rounded-2xl flex items-center justify-center shadow-md text-white ${
-                step === 'verified' ? 'bg-emerald-600' : 'bg-indigo-600'
+                !isEditingEmail && emailInput ? 'bg-emerald-600' : 'bg-indigo-600'
               }`}
             >
-              {step === 'verified' ? <ShieldCheck size={22} /> : <KeyRound size={22} />}
+              <Cloud size={22} />
             </div>
             <div>
               <h3 className="text-base font-black text-slate-900 dark:text-white">
-                {step === 'verified'
-                  ? 'Verified Email & Live Google Drive Mirror'
-                  : '4-Digit Email Verification & Drive Sync'}
+                {!isEditingEmail && emailInput
+                  ? 'Google Drive Linked & Auto-Sync Active'
+                  : 'Link Google Drive & Multi-Device Sync'}
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                {step === 'verified'
-                  ? 'Real-time mirroring active across PC, Mobile & Google Drive'
-                  : 'Verify your Email ID with a 4-digit code to mirror data everywhere'}
+                {!isEditingEmail && emailInput
+                  ? 'Changes auto-save to Google Drive and reflect across all linked devices'
+                  : 'Link your Google Drive email to auto-save and sync across PC & Mobile'}
               </p>
             </div>
           </div>
@@ -248,12 +171,12 @@ export const EmailVerificationModal: React.FC<EmailVerificationModalProps> = ({
           </div>
         )}
 
-        {/* STEP 1: ENTER EMAIL ID TO RECEIVE 4-DIGIT CODE */}
-        {step === 'enter-email' && (
-          <form onSubmit={handleSend4DigitCode} className="space-y-4">
+        {/* LINK GOOGLE DRIVE EMAIL FORM */}
+        {isEditingEmail ? (
+          <form onSubmit={handleDirectLinkEmail} className="space-y-4">
             <div>
               <label className="block text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1.5">
-                Enter Your Email ID (Google Drive &amp; Multi-Device Account)
+                Google Drive Email ID (For Auto-Save &amp; All-Device Sync)
               </label>
               <div className="relative">
                 <Mail size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -262,7 +185,7 @@ export const EmailVerificationModal: React.FC<EmailVerificationModalProps> = ({
                   required
                   value={emailInput}
                   onChange={e => setEmailInput(e.target.value)}
-                  placeholder="e.g. user@company.com"
+                  placeholder="e.g. yourname@gmail.com"
                   className="w-full pl-10 pr-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
@@ -277,7 +200,7 @@ export const EmailVerificationModal: React.FC<EmailVerificationModalProps> = ({
                 <RefreshCw size={15} className="animate-spin" />
               ) : (
                 <>
-                  <span>Send 4-Digit Verification Code</span>
+                  <span>Link Google Drive Email &amp; Auto-Sync</span>
                   <ArrowRight size={15} />
                 </>
               )}
@@ -286,7 +209,7 @@ export const EmailVerificationModal: React.FC<EmailVerificationModalProps> = ({
             <div className="relative flex py-1 items-center">
               <div className="grow border-t border-slate-200 dark:border-slate-800" />
               <span className="shrink mx-3 text-[10px] font-black uppercase tracking-wider text-slate-400">
-                Or Connect Directly
+                Or Connect via Google Sign-In
               </span>
               <div className="grow border-t border-slate-200 dark:border-slate-800" />
             </div>
@@ -297,9 +220,10 @@ export const EmailVerificationModal: React.FC<EmailVerificationModalProps> = ({
               onClick={async () => {
                 setStatusMsg({ type: 'info', text: 'Connecting to Google Drive...' });
                 await onConnectGoogleDrive();
+                setIsEditingEmail(false);
                 setStatusMsg({
                   type: 'success',
-                  text: 'Google Drive connected and workspace mirrored successfully!'
+                  text: 'Google Drive connected and workspace auto-sync is active!'
                 });
               }}
               className="w-full py-2.5 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-2.5 shadow-2xs"
@@ -314,102 +238,15 @@ export const EmailVerificationModal: React.FC<EmailVerificationModalProps> = ({
             </button>
 
             <p className="text-[11px] text-slate-400 leading-relaxed text-center">
-              Once verified with the 4-digit code or Google sign-in, your app data mirrors and syncs automatically to Google Drive and all devices connected with this Email ID.
+              Once linked, all your data automatically stores in Google Drive. Logging in from any other device with this Google Drive or email automatically links and syncs all changes in real time.
             </p>
           </form>
-        )}
-
-        {/* STEP 2: ENTER 4-NUMBER VERIFICATION CODE */}
-        {step === 'enter-code' && (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-600 dark:text-slate-300">
-                Verifying: <strong className="text-indigo-600 dark:text-indigo-400">{emailInput}</strong>
-              </span>
-              <button
-                type="button"
-                onClick={() => setStep('enter-email')}
-                className="text-[11px] font-black text-slate-400 hover:text-indigo-600"
-              >
-                Change Email
-              </button>
-            </div>
-
-            {/* Instant Verification Code Dispatch Banner */}
-            {dispatchedCode && (
-              <div className="p-3.5 rounded-2xl bg-slate-900 text-white border border-slate-800 flex items-center justify-between">
-                <div>
-                  <span className="text-[10px] font-black uppercase tracking-widest text-indigo-400 block">
-                    Instant Verification Dispatch
-                  </span>
-                  <span className="text-xs text-slate-300">
-                    Your 4-Digit Code:{' '}
-                    <strong className="text-base font-black tracking-[0.25em] text-amber-300 ml-1">
-                      {dispatchedCode}
-                    </strong>
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleAutoFillCode}
-                  className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-black transition-all"
-                >
-                  Auto-Fill &amp; Verify
-                </button>
-              </div>
-            )}
-
-            {/* 4-Box OTP Input */}
-            <div className="space-y-2">
-              <label className="block text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400 text-center">
-                Enter 4-Digit Verification Code
-              </label>
-              <div className="flex items-center justify-center gap-3 py-1">
-                {[0, 1, 2, 3].map(idx => (
-                  <input
-                    key={idx}
-                    ref={inputRefs[idx]}
-                    type="text"
-                    inputMode="numeric"
-                    maxLength={4}
-                    value={digits[idx]}
-                    onChange={e => handleDigitChange(idx, e.target.value)}
-                    onKeyDown={e => handleKeyDown(idx, e)}
-                    className="w-14 h-16 text-center text-2xl font-black rounded-2xl bg-slate-50 dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:border-indigo-600 focus:ring-4 focus:ring-indigo-500/20 outline-none transition-all"
-                  />
-                ))}
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => handleSend4DigitCode()}
-                disabled={isLoading}
-                className="px-4 py-3 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-xs font-bold hover:bg-slate-200 transition-all"
-              >
-                Resend Code
-              </button>
-              <button
-                type="button"
-                onClick={() => verify4DigitCode(digits.join(''))}
-                disabled={isLoading || digits.join('').length !== 4}
-                className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center space-x-2 shadow-lg shadow-emerald-500/20 transition-all disabled:opacity-50"
-              >
-                <ShieldCheck size={16} />
-                <span>{isLoading ? 'Verifying & Mirroring...' : 'Verify & Mirror Now'}</span>
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* STEP 3: VERIFIED & AUTOMATIC REAL-TIME MIRROR ACTIVE */}
-        {step === 'verified' && (
+        ) : (
           <div className="space-y-4">
             <div className="p-4 rounded-2xl bg-emerald-50/90 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/80 flex items-center justify-between">
               <div className="flex items-center space-x-3 min-w-0">
                 <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
-                  <ShieldCheck size={20} />
+                  <CheckCircle2 size={20} />
                 </div>
                 <div className="min-w-0">
                   <div className="flex items-center space-x-1.5">
@@ -417,23 +254,20 @@ export const EmailVerificationModal: React.FC<EmailVerificationModalProps> = ({
                       {emailInput}
                     </span>
                     <span className="px-2 py-0.5 rounded-full bg-emerald-600 text-white text-[9px] font-black uppercase">
-                      4-Digit Verified
+                      Linked &amp; Active
                     </span>
                   </div>
                   <p className="text-[11px] text-emerald-700 dark:text-emerald-300 mt-0.5">
-                    Auto-mirroring &amp; syncing live across PC, Mobile &amp; Google Drive
+                    Auto-saving to Google Drive &amp; syncing live across all devices
                   </p>
                 </div>
               </div>
               <button
                 type="button"
-                onClick={() => {
-                  setStep('enter-email');
-                  setDigits(['', '', '', '']);
-                }}
+                onClick={() => setIsEditingEmail(true)}
                 className="text-[11px] font-black text-emerald-700 dark:text-emerald-300 hover:underline shrink-0 ml-2"
               >
-                Change
+                Change Email
               </button>
             </div>
 
@@ -441,37 +275,11 @@ export const EmailVerificationModal: React.FC<EmailVerificationModalProps> = ({
               <button
                 type="button"
                 onClick={async () => {
-                  setStatusMsg({ type: 'info', text: 'Connecting & syncing with Google Drive...' });
-                  await onConnectGoogleDrive();
-                  setStatusMsg({
-                    type: 'success',
-                    text: `Google Drive Mirror active for ${emailInput}! All records are backed up.`
-                  });
-                }}
-                disabled={isSyncingExternal || isLoading}
-                className="p-3.5 rounded-2xl bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 flex items-center space-x-3 text-left transition-all"
-              >
-                <HardDrive size={20} className="text-emerald-600 shrink-0" />
-                <div>
-                  <p className="text-xs font-black text-slate-900 dark:text-white">
-                    {driveConnected ? 'Google Drive Mirror Active' : 'Connect Google Drive'}
-                  </p>
-                  <p className="text-[10px] text-slate-500">
-                    {driveConnected
-                      ? 'Master file auto-syncs on every edit'
-                      : 'Authorize direct Google Drive file mirror'}
-                  </p>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={async () => {
-                  setStatusMsg({ type: 'info', text: 'Mirroring & syncing workspace data...' });
+                  setStatusMsg({ type: 'info', text: 'Saving & syncing all changes to Google Drive...' });
                   await onManualSyncNow();
                   setStatusMsg({
                     type: 'success',
-                    text: `All invoices, clients, and settings synced with ${emailInput}!`
+                    text: `All invoices, clients, expenses & settings saved to Google Drive (${emailInput})!`
                   });
                 }}
                 disabled={isSyncingExternal || isLoading}
@@ -483,10 +291,27 @@ export const EmailVerificationModal: React.FC<EmailVerificationModalProps> = ({
                 />
                 <div>
                   <p className="text-xs font-black text-indigo-950 dark:text-indigo-200">
-                    {isSyncingExternal ? 'Mirroring Data...' : 'Mirror & Sync Now'}
+                    {isSyncingExternal ? 'Syncing Data...' : 'Save & Sync to Drive Now'}
                   </p>
                   <p className="text-[10px] text-indigo-600 dark:text-indigo-400">
-                    Instant two-way sync across all systems
+                    Push all changes to Google Drive &amp; other devices
+                  </p>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={handlePullLatest}
+                disabled={isSyncingExternal || isLoading}
+                className="p-3.5 rounded-2xl bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 flex items-center space-x-3 text-left transition-all"
+              >
+                <HardDrive size={20} className="text-emerald-600 shrink-0" />
+                <div>
+                  <p className="text-xs font-black text-slate-900 dark:text-white">
+                    Pull Latest from Drive
+                  </p>
+                  <p className="text-[10px] text-slate-500">
+                    Fetch latest changes from other linked devices
                   </p>
                 </div>
               </button>
