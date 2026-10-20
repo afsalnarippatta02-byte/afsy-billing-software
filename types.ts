@@ -160,6 +160,7 @@ export interface Invoice {
   includeSeal?: boolean;
   showRemarks?: boolean;
   showAmountInWords?: boolean;
+  showDueDate?: boolean;
 }
 
 export interface Expense {
@@ -248,6 +249,7 @@ export interface CompanySettings {
   invoiceShowRemarks?: boolean;
   invoiceShowAmountInWords?: boolean;
   invoiceShowFooterNote?: boolean;
+  invoiceShowDueDate?: boolean;
   invoiceCompactMode?: boolean;
   statementTemplate?:
     | 'standard_audit'

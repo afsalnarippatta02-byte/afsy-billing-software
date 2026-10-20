@@ -1476,6 +1476,46 @@ export const printElementDirectly = (elementId: string, title?: string): Promise
               * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
               table { width: 100%; border-collapse: collapse; }
               th, td { padding: 6px 8px; }
+              .date-badge-black, [data-date-badge], .date-badge-container {
+                background-color: #ffffff !important;
+                color: #0f172a !important;
+                border: 1.5px solid #0f172a !important;
+                display: inline-flex !important;
+                visibility: visible !important;
+                opacity: 1 !important;
+              }
+              .date-badge-black span, [data-date-badge] span, .date-display-text {
+                color: #0f172a !important;
+                font-weight: 800 !important;
+                visibility: visible !important;
+                opacity: 1 !important;
+              }
+              .supplier-trn-badge, [class*="supplier-trn"] {
+                background-color: #ffffff !important;
+                border: 1.5px solid #0f172a !important;
+                color: #0f172a !important;
+                display: inline-flex !important;
+                visibility: visible !important;
+                opacity: 1 !important;
+              }
+              .supplier-trn-badge span, .supplier-trn-label, .supplier-trn-value {
+                color: #0f172a !important;
+                visibility: visible !important;
+                opacity: 1 !important;
+              }
+              .amount-in-words-box, [class*="amount-in-words"] {
+                background-color: #ffffff !important;
+                border: 1.5px solid #0f172a !important;
+                color: #0f172a !important;
+                display: block !important;
+                visibility: visible !important;
+                opacity: 1 !important;
+              }
+              .amount-in-words-box p, .amount-in-words-text {
+                color: #0f172a !important;
+                visibility: visible !important;
+                opacity: 1 !important;
+              }
             </style>
           </head>
           <body>
@@ -1537,9 +1577,10 @@ export const downloadElementAsPdf = async (
       logging: false,
       backgroundColor: '#ffffff',
       windowWidth: 1200,
+      imageTimeout: 5000, // 5s max image load to prevent infinite hanging
       onclone: (clonedDoc, clonedElement) => {
-        // 1. Copy all head styles and stylesheets into clonedDoc so styling matches exactly
-        document.querySelectorAll('style, link[rel="stylesheet"]').forEach((s) => {
+        // 1. Copy all head styles (avoiding external link stylesheets to prevent CORS fetch stalling)
+        document.querySelectorAll('style').forEach((s) => {
           clonedDoc.head.appendChild(s.cloneNode(true));
         });
 
@@ -1557,16 +1598,63 @@ export const downloadElementAsPdf = async (
         });
 
         // 3. Guarantee Date, Due Date, and TRN badge contrast and visibility
-        clonedElement.querySelectorAll('.date-badge-black, [data-date-badge]').forEach((el) => {
+        clonedElement.querySelectorAll('.date-badge-black, [data-date-badge], .date-badge-container').forEach((el) => {
           const htmlEl = el as HTMLElement;
-          htmlEl.style.backgroundColor = '#0f172a';
-          htmlEl.style.color = '#ffffff';
-          htmlEl.style.display = 'flex';
+          htmlEl.style.backgroundColor = '#ffffff';
+          htmlEl.style.border = '1.5px solid #0f172a';
+          htmlEl.style.color = '#0f172a';
+          htmlEl.style.display = 'inline-flex';
           htmlEl.style.alignItems = 'center';
           htmlEl.style.justifyContent = 'center';
-          htmlEl.style.borderRadius = '8px';
-          htmlEl.style.padding = '6px 12px';
-          htmlEl.style.minHeight = '36px';
+          htmlEl.style.borderRadius = '10px';
+          htmlEl.style.padding = '6px 14px';
+          htmlEl.style.minHeight = '38px';
+          htmlEl.style.visibility = 'visible';
+          htmlEl.style.opacity = '1';
+          htmlEl.querySelectorAll('span, .date-display-text').forEach((s) => {
+            const spanEl = s as HTMLElement;
+            spanEl.style.color = '#0f172a';
+            spanEl.style.fontWeight = '800';
+            spanEl.style.fontSize = '13px';
+            spanEl.style.visibility = 'visible';
+            spanEl.style.opacity = '1';
+            spanEl.style.display = 'inline-block';
+          });
+        });
+
+        // Guarantee Supplier TRN visibility
+        clonedElement.querySelectorAll('.supplier-trn-badge, [class*="supplier-trn"]').forEach((el) => {
+          const htmlEl = el as HTMLElement;
+          htmlEl.style.backgroundColor = '#ffffff';
+          htmlEl.style.border = '1.5px solid #0f172a';
+          htmlEl.style.color = '#0f172a';
+          htmlEl.style.display = 'inline-flex';
+          htmlEl.style.alignItems = 'center';
+          htmlEl.style.visibility = 'visible';
+          htmlEl.style.opacity = '1';
+          htmlEl.querySelectorAll('span').forEach((s) => {
+            const spanEl = s as HTMLElement;
+            spanEl.style.color = '#0f172a';
+            spanEl.style.visibility = 'visible';
+            spanEl.style.opacity = '1';
+          });
+        });
+
+        // Guarantee Amount in Words visibility
+        clonedElement.querySelectorAll('.amount-in-words-box, [class*="amount-in-words"]').forEach((el) => {
+          const htmlEl = el as HTMLElement;
+          htmlEl.style.backgroundColor = '#ffffff';
+          htmlEl.style.border = '1.5px solid #0f172a';
+          htmlEl.style.color = '#0f172a';
+          htmlEl.style.visibility = 'visible';
+          htmlEl.style.opacity = '1';
+          htmlEl.style.display = 'block';
+          htmlEl.querySelectorAll('p, span').forEach((s) => {
+            const sub = s as HTMLElement;
+            sub.style.color = '#0f172a';
+            sub.style.visibility = 'visible';
+            sub.style.opacity = '1';
+          });
         });
 
         // 4. Remove interactive non-printable elements completely
@@ -1638,8 +1726,10 @@ export const downloadElementAsPdf = async (
     pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
     heightLeft -= pdfHeight;
 
-    // Handle multi-page if content exceeds 1 page
-    while (heightLeft > 5) {
+    // Handle multi-page if content exceeds 1 page (guarded against runaway loops)
+    let pageCount = 1;
+    while (heightLeft > 5 && pageCount < 20) {
+      pageCount++;
       position = heightLeft - imgHeight;
       pdf.addPage();
       pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight, undefined, 'FAST');

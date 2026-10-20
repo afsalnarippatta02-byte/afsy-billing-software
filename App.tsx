@@ -1201,6 +1201,9 @@ const App: React.FC = () => {
                 setSelectedInvoiceId(null);
                 setAutoPrint(false);
               }}
+              onAutoPrintDone={() => {
+                setAutoPrint(false);
+              }}
             />
           )}
 

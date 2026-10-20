@@ -71,10 +71,11 @@
         html.dark .custom-scrollbar::-webkit-scrollbar-thumb {
             background: #334155;
         }
-        /* Black Date Background Styling */
+        /* High-Contrast Print & PDF-Safe Date Badge Styling */
         .date-badge-black {
-            background-color: #000000 !important;
-            color: #ffffff !important;
+            background-color: #ffffff !important;
+            color: #0f172a !important;
+            border: 1.5px solid #0f172a !important;
             padding: 6px 14px;
             border-radius: 10px;
             font-weight: 800;
@@ -83,7 +84,7 @@
             justify-content: center;
             text-align: center;
             letter-spacing: 0.5px;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
         }
         /* Print Styles for Professional PDF */
         @media print {
@@ -125,10 +126,47 @@
                 border-radius: 0 !important;
                 background: white !important;
             }
-            .date-badge-black {
-                background-color: #000 !important;
-                color: #fff !important;
+            .date-badge-black, [data-date-badge], .date-badge-container {
+                background-color: #ffffff !important;
+                color: #0f172a !important;
+                border: 1.5px solid #0f172a !important;
                 box-shadow: none !important;
+                display: inline-flex !important;
+                visibility: visible !important;
+                opacity: 1 !important;
+            }
+            .date-badge-black span, [data-date-badge] span, .date-display-text {
+                color: #0f172a !important;
+                font-weight: 800 !important;
+                visibility: visible !important;
+                opacity: 1 !important;
+                display: inline-block !important;
+            }
+            .supplier-trn-badge, [class*="supplier-trn"] {
+                background-color: #ffffff !important;
+                border: 1.5px solid #0f172a !important;
+                color: #0f172a !important;
+                display: inline-flex !important;
+                visibility: visible !important;
+                opacity: 1 !important;
+            }
+            .supplier-trn-badge span, .supplier-trn-label, .supplier-trn-value {
+                color: #0f172a !important;
+                visibility: visible !important;
+                opacity: 1 !important;
+            }
+            .amount-in-words-box, [class*="amount-in-words"] {
+                background-color: #ffffff !important;
+                border: 1.5px solid #0f172a !important;
+                color: #0f172a !important;
+                display: block !important;
+                visibility: visible !important;
+                opacity: 1 !important;
+            }
+            .amount-in-words-box p, .amount-in-words-text {
+                color: #0f172a !important;
+                visibility: visible !important;
+                opacity: 1 !important;
             }
             input, select, textarea {
                 border: none !important;

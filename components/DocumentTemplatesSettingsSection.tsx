@@ -79,6 +79,7 @@ export const DocumentTemplatesSettingsSection: React.FC<DocumentTemplatesSetting
   const invShowRemarks = formData.invoiceShowRemarks !== false;
   const invShowAmountInWords = formData.invoiceShowAmountInWords !== false;
   const invShowFooterNote = formData.invoiceShowFooterNote !== false;
+  const invShowDueDate = formData.invoiceShowDueDate !== false;
 
   const handleSelectInvoicePreset = (preset: DocumentTemplatePreset) => {
     onUpdateFields({
@@ -609,8 +610,8 @@ export const DocumentTemplatesSettingsSection: React.FC<DocumentTemplatesSetting
                   </button>
                 </div>
 
-                {/* Additional Section Toggles: Remarks & Payment Instructions, Amount in Words, Bottom Footer */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                {/* Additional Section Toggles: Remarks & Payment Instructions, Amount in Words, Due Date, Bottom Footer */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
                   {/* Remarks & Payment Instructions Toggle */}
                   <button
                     type="button"
@@ -623,7 +624,7 @@ export const DocumentTemplatesSettingsSection: React.FC<DocumentTemplatesSetting
                   >
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-xs font-black text-slate-900 dark:text-white">
-                        Remarks &amp; Instructions
+                        Remarks &amp; Notes
                       </span>
                       <span
                         className={`text-[10px] font-black uppercase ${
@@ -634,7 +635,7 @@ export const DocumentTemplatesSettingsSection: React.FC<DocumentTemplatesSetting
                       </span>
                     </div>
                     <p className="text-[11px] text-slate-500">
-                      Lengthy multi-line notes, payment instructions, delivery terms box
+                      Multi-line notes, payment instructions, delivery terms
                     </p>
                   </button>
 
@@ -650,7 +651,7 @@ export const DocumentTemplatesSettingsSection: React.FC<DocumentTemplatesSetting
                   >
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-xs font-black text-slate-900 dark:text-white">
-                        Amount in English Words
+                        Amount in Words
                       </span>
                       <span
                         className={`text-[10px] font-black uppercase ${
@@ -661,7 +662,34 @@ export const DocumentTemplatesSettingsSection: React.FC<DocumentTemplatesSetting
                       </span>
                     </div>
                     <p className="text-[11px] text-slate-500">
-                      Auto-converts Grand Total to English words (AED / Dirhams)
+                      Grand Total in English words (UAE Dirhams Only)
+                    </p>
+                  </button>
+
+                  {/* Due Date Display Toggle */}
+                  <button
+                    type="button"
+                    onClick={() => onUpdateFields({ invoiceShowDueDate: !invShowDueDate })}
+                    className={`p-3.5 rounded-2xl border text-left transition-all ${
+                      invShowDueDate
+                        ? 'bg-indigo-50/70 dark:bg-indigo-950/40 border-indigo-300 dark:border-indigo-800'
+                        : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-black text-slate-900 dark:text-white">
+                        Invoice Due Date
+                      </span>
+                      <span
+                        className={`text-[10px] font-black uppercase ${
+                          invShowDueDate ? 'text-indigo-600' : 'text-slate-400'
+                        }`}
+                      >
+                        {invShowDueDate ? 'Shown' : 'Hidden'}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      Option to display or remove Due Date from invoice
                     </p>
                   </button>
                 </div>
@@ -833,15 +861,17 @@ export const DocumentTemplatesSettingsSection: React.FC<DocumentTemplatesSetting
                           13 Oct 2026
                         </span>
                       </div>
-                      <div className="flex justify-between items-center text-[10px]">
-                        <span className="text-slate-400 uppercase font-bold">Due Date:</span>
-                        <span
-                          style={{ backgroundColor: '#0f172a', color: '#ffffff' }}
-                          className="font-black px-2 py-0.5 rounded text-[10px]"
-                        >
-                          12 Nov 2026
-                        </span>
-                      </div>
+                      {invShowDueDate && (
+                        <div className="flex justify-between items-center text-[10px]">
+                          <span className="text-slate-400 uppercase font-bold">Due Date:</span>
+                          <span
+                            style={{ backgroundColor: '#0f172a', color: '#ffffff' }}
+                            className="font-black px-2 py-0.5 rounded text-[10px]"
+                          >
+                            12 Nov 2026
+                          </span>
+                        </div>
+                      )}
                       {invDefaultPaymentTerms !== 'none' && (
                         <div className="flex justify-between items-center text-[10px] pt-0.5 border-t border-slate-200">
                           <span className="text-slate-400 uppercase font-bold">Payment Terms:</span>

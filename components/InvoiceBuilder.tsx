@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Plus,
   Trash2,
@@ -47,6 +47,7 @@ interface InvoiceBuilderProps {
   onSave: (invoice: Invoice) => void;
   onDelete?: (id: string) => void;
   onCancel: () => void;
+  onAutoPrintDone?: () => void;
 }
 
 const UNIT_OPTIONS = ['Nos', 'Pcs', 'Unit', 'Set', 'Box', 'Lot', 'Service', 'Hrs', 'Days', 'Kg', 'Mtr'];
@@ -143,7 +144,8 @@ export const InvoiceBuilder: React.FC<InvoiceBuilderProps> = ({
   role,
   onSave,
   onDelete,
-  onCancel
+  onCancel,
+  onAutoPrintDone
 }) => {
   const getToday = () => new Date().toISOString().split('T')[0];
   const getNextMonth = () => {
@@ -207,6 +209,7 @@ export const InvoiceBuilder: React.FC<InvoiceBuilderProps> = ({
     includeSeal: settings.autoApplySeal ?? Boolean(settings.companySealUrl),
     showRemarks: settings.invoiceShowRemarks !== false,
     showAmountInWords: settings.invoiceShowAmountInWords !== false,
+    showDueDate: settings.invoiceShowDueDate !== false,
     notes:
       initialDocumentType === 'PROFORMA'
         ? `1. Proforma Invoice valid for 15 days from date of issuance.\n2. Please make payments via Bank Transfer.\n3. Goods will be dispatched upon receipt of full payment.`
@@ -217,6 +220,8 @@ export const InvoiceBuilder: React.FC<InvoiceBuilderProps> = ({
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [exportStatusMsg, setExportStatusMsg] = useState<string>('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const autoPrintTriggeredRef = useRef(false);
+  const isExportingRef = useRef(false);
 
   // Active Invoice Template & Format Customization State
   const [activeTemplateId, setActiveTemplateId] = useState<string>(
@@ -254,11 +259,13 @@ export const InvoiceBuilder: React.FC<InvoiceBuilderProps> = ({
   const invShowRemarksSetting = settings.invoiceShowRemarks !== false;
   const invShowAmountInWordsSetting = settings.invoiceShowAmountInWords !== false;
   const invShowFooterNote = settings.invoiceShowFooterNote !== false;
+  const invShowDueDateSetting = settings.invoiceShowDueDate !== false;
   const invCustomHeading = settings.invoiceCustomTitle || 'TAX INVOICE';
   const invSubtitle = settings.invoiceSubtitle || '';
 
   const isRemarksVisible = invoice.showRemarks !== undefined ? invoice.showRemarks : invShowRemarksSetting;
   const isAmountInWordsVisible = invoice.showAmountInWords !== undefined ? invoice.showAmountInWords : invShowAmountInWordsSetting;
+  const isDueDateVisible = invoice.showDueDate !== undefined ? invoice.showDueDate : invShowDueDateSetting;
 
   // Quick Client Creation Modal State
   const [isAddingClient, setIsAddingClient] = useState(false);
@@ -371,7 +378,11 @@ export const InvoiceBuilder: React.FC<InvoiceBuilderProps> = ({
           showAmountInWords:
             found.showAmountInWords !== undefined
               ? found.showAmountInWords
-              : settings.invoiceShowAmountInWords !== false
+              : settings.invoiceShowAmountInWords !== false,
+          showDueDate:
+            found.showDueDate !== undefined
+              ? found.showDueDate
+              : settings.invoiceShowDueDate !== false
         });
         if (found.showPaymentTerms && found.paymentTermsDays !== undefined) {
           setPaymentTermsOption(String(found.paymentTermsDays));
@@ -384,10 +395,11 @@ export const InvoiceBuilder: React.FC<InvoiceBuilderProps> = ({
         }
       }
     }
-  }, [invoiceId, invoices, settings.invoiceDefaultPaymentTerms]);
+  }, [invoiceId, invoices, settings.invoiceDefaultPaymentTerms, settings.invoiceShowRemarks, settings.invoiceShowAmountInWords, settings.invoiceShowDueDate]);
 
   const handleDownloadPdf = useCallback(async () => {
-    if (isExportingPdf) return;
+    if (isExportingRef.current) return;
+    isExportingRef.current = true;
     setIsExportingPdf(true);
     setExportStatusMsg('Preparing PDF...');
 
@@ -398,28 +410,45 @@ export const InvoiceBuilder: React.FC<InvoiceBuilderProps> = ({
         ? 'Proforma_Invoice'
         : 'Invoice';
 
-    await downloadElementAsPdf(
-      'invoice-printable-document',
-      `${docPrefix}_${invoice.id}.pdf`,
-      (_status, msg) => {
-        if (msg) setExportStatusMsg(msg);
-      }
-    );
-
-    setTimeout(() => {
+    try {
+      await downloadElementAsPdf(
+        'invoice-printable-document',
+        `${docPrefix}_${invoice.id || 'INV'}.pdf`,
+        (_status, msg) => {
+          if (msg) setExportStatusMsg(msg);
+        }
+      );
+    } catch (err) {
+      console.error('PDF generation error:', err);
+    } finally {
       setIsExportingPdf(false);
       setExportStatusMsg('');
-    }, 1200);
-  }, [invoice.id, invoice.status, isExportingPdf]);
+      setTimeout(() => {
+        isExportingRef.current = false;
+      }, 1200);
+      if (onAutoPrintDone) {
+        onAutoPrintDone();
+      }
+    }
+  }, [invoice.id, invoice.status, onAutoPrintDone]);
+
+  // Keep ref up to date so autoPrint effect does not get re-triggered or cleared by invoice state changes
+  const handleDownloadPdfRef = useRef(handleDownloadPdf);
+  handleDownloadPdfRef.current = handleDownloadPdf;
 
   useEffect(() => {
-    if (autoPrint) {
+    if (!autoPrint) {
+      autoPrintTriggeredRef.current = false;
+      return;
+    }
+    if (autoPrint && !autoPrintTriggeredRef.current) {
+      autoPrintTriggeredRef.current = true;
       const timer = setTimeout(() => {
-        handleDownloadPdf();
+        handleDownloadPdfRef.current();
       }, 600);
       return () => clearTimeout(timer);
     }
-  }, [autoPrint, handleDownloadPdf]);
+  }, [autoPrint]);
 
   const addItem = () => {
     setInvoice(prev => ({
@@ -893,20 +922,23 @@ ${settings.email || ''}`;
                 )}
                 <div
                   style={{
-                    backgroundColor: invHeaderLayout === 'banner' ? 'rgba(255,255,255,0.25)' : '#0f172a',
-                    color: '#ffffff'
+                    backgroundColor: '#ffffff',
+                    color: '#0f172a',
+                    border: '1.5px solid #0f172a'
                   }}
-                  className={`inline-flex items-center space-x-1.5 px-3 py-1 rounded-lg text-[11px] font-black tracking-wider mt-1.5 shadow-xs ${
-                    invHeaderLayout === 'banner'
-                      ? 'border border-white/30'
-                      : ''
-                  }`}
+                  className="supplier-trn-badge inline-flex items-center space-x-1.5 px-3 py-1 rounded-lg text-[11px] font-black tracking-wider mt-1.5 shadow-xs"
                 >
-                  <span style={{ color: '#ffffff', opacity: 0.9 }} className="text-[10px] uppercase tracking-widest">
+                  <span
+                    style={{ color: '#0f172a' }}
+                    className="supplier-trn-label text-[10px] uppercase tracking-widest font-bold"
+                  >
                     Supplier TRN:
                   </span>
-                  <span style={{ color: '#ffffff' }} className="font-mono tabular-nums font-bold">
-                    {settings.vatNumber || settings.trnNumber || '100293848100003'}
+                  <span
+                    style={{ color: '#0f172a' }}
+                    className="supplier-trn-value font-mono tabular-nums font-black text-xs"
+                  >
+                    {settings.vatNumber || settings.trnNumber || (settings as any).trn || '100293848100003'}
                   </span>
                 </div>
               </div>
@@ -1195,23 +1227,23 @@ ${settings.email || ''}`;
           </div>
 
           <div className="md:col-span-5 flex flex-col gap-3 bg-slate-50/70 p-4 rounded-2xl border border-slate-200/70">
-            {/* Top row: Invoice Date and Due Date */}
-            <div className="grid grid-cols-2 gap-3">
+            {/* Top row: Invoice Date and Due Date (with Remove / Add Due Date Option) */}
+            <div className={`grid ${isDueDateVisible ? 'grid-cols-2' : 'grid-cols-1 sm:grid-cols-2'} gap-3`}>
               <div className="space-y-1">
                 <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider block">
                   Invoice Date
                 </label>
                 <div
                   data-date-badge="true"
-                  style={{ backgroundColor: '#0f172a', color: '#ffffff' }}
-                  className="relative group date-badge-black w-full min-h-[38px] px-3 py-2 rounded-xl flex items-center justify-center text-center shadow-xs"
+                  style={{ backgroundColor: '#ffffff', color: '#0f172a', border: '1.5px solid #0f172a' }}
+                  className="relative group date-badge-black date-badge-container w-full min-h-[38px] px-3 py-2 rounded-xl flex items-center justify-center text-center shadow-xs"
                 >
                   {/* Always 100% visible formatted date on screen, print, and PDF download */}
                   <span
-                    style={{ color: '#ffffff' }}
-                    className="font-black text-xs sm:text-sm tracking-wide tabular-nums select-none"
+                    style={{ color: '#0f172a' }}
+                    className="date-display-text font-black text-xs sm:text-sm tracking-wide tabular-nums select-none"
                   >
-                    {formatDate(invoice.date)}
+                    {formatDate(invoice.date) || invoice.date || '14-10-2026'}
                   </span>
                   <input
                     type="date"
@@ -1223,31 +1255,58 @@ ${settings.email || ''}`;
                 </div>
               </div>
 
-              <div className="space-y-1">
-                <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider block">
-                  {isQuotation ? 'Valid Until' : isProforma ? 'Valid Until' : 'Due Date'}
-                </label>
-                <div
-                  data-date-badge="true"
-                  style={{ backgroundColor: '#0f172a', color: '#ffffff' }}
-                  className="relative group date-badge-black w-full min-h-[38px] px-3 py-2 rounded-xl flex items-center justify-center text-center shadow-xs"
-                >
-                  {/* Always 100% visible formatted due date on screen, print, and PDF download */}
-                  <span
-                    style={{ color: '#ffffff' }}
-                    className="font-black text-xs sm:text-sm tracking-wide tabular-nums select-none"
+              {isDueDateVisible ? (
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider block">
+                      {isQuotation ? 'Valid Until' : isProforma ? 'Valid Until' : 'Due Date'}
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setInvoice(p => ({ ...p, showDueDate: false }))}
+                      title="Remove Due Date from this invoice"
+                      className="no-print text-[9px] font-bold text-slate-400 hover:text-rose-600 transition-colors"
+                    >
+                      (Remove)
+                    </button>
+                  </div>
+                  <div
+                    data-date-badge="true"
+                    style={{ backgroundColor: '#ffffff', color: '#0f172a', border: '1.5px solid #0f172a' }}
+                    className="relative group date-badge-black date-badge-container w-full min-h-[38px] px-3 py-2 rounded-xl flex items-center justify-center text-center shadow-xs"
                   >
-                    {formatDate(invoice.dueDate)}
-                  </span>
-                  <input
-                    type="date"
-                    value={invoice.dueDate}
-                    onChange={e => setInvoice(p => ({ ...p, dueDate: e.target.value }))}
-                    title="Click to change Due Date"
-                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer no-print"
-                  />
+                    {/* Always 100% visible formatted due date on screen, print, and PDF download */}
+                    <span
+                      style={{ color: '#0f172a' }}
+                      className="date-display-text font-black text-xs sm:text-sm tracking-wide tabular-nums select-none"
+                    >
+                      {formatDate(invoice.dueDate) || invoice.dueDate || formatDate(invoice.date)}
+                    </span>
+                    <input
+                      type="date"
+                      value={invoice.dueDate}
+                      onChange={e => setInvoice(p => ({ ...p, dueDate: e.target.value }))}
+                      title="Click to change Due Date"
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer no-print"
+                    />
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div className="no-print space-y-1">
+                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider block">
+                    {isQuotation ? 'Valid Until' : isProforma ? 'Valid Until' : 'Due Date'}
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setInvoice(p => ({ ...p, showDueDate: true }))}
+                    className="w-full min-h-[38px] px-3 py-2 rounded-xl border border-dashed border-indigo-300 hover:border-indigo-500 bg-indigo-50/60 hover:bg-indigo-50 text-[11px] font-bold text-indigo-700 flex items-center justify-center gap-1.5 transition-all"
+                    title="Add Due Date to this document"
+                  >
+                    <Plus size={13} />
+                    <span>+ Add Due Date</span>
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Bottom Row: LPO / Ref No. AND Payment Terms (with Add / Remove option & 1 Month auto due date!) */}
@@ -1812,28 +1871,41 @@ ${settings.email || ''}`;
               </div>
             </div>
 
-            {/* Final Amount in English Words (displayed when total > 0 and enabled) */}
-            {total > 0 && isAmountInWordsVisible && Boolean(amountToEnglishWords(total, invoice.currency || 'AED')) && (
-              <div className="pt-2 pb-1 text-right">
-                <div className="flex items-center justify-end gap-1.5">
-                  <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">
-                    Total in Words:
+            {/* Final Amount in English Words (displayed when enabled) */}
+            {isAmountInWordsVisible && (
+              <div
+                style={{
+                  backgroundColor: '#ffffff',
+                  color: '#0f172a',
+                  border: '1.5px solid #0f172a'
+                }}
+                className="amount-in-words-box p-3 rounded-xl mt-2 text-right shadow-xs"
+              >
+                <div className="flex items-center justify-end gap-1.5 mb-1">
+                  <span
+                    style={{ color: '#475569' }}
+                    className="text-[10px] font-black uppercase tracking-wider block"
+                  >
+                    Total Amount in Words ({invoice.currency || 'AED'}):
                   </span>
                   <button
                     type="button"
                     onClick={() => setInvoice(p => ({ ...p, showAmountInWords: false }))}
                     title="Remove Total in Words from this invoice"
-                    className="no-print text-[9px] text-slate-300 hover:text-rose-500 transition-colors"
+                    className="no-print text-[9px] font-bold text-slate-400 hover:text-rose-500 transition-colors"
                   >
                     (Remove)
                   </button>
                 </div>
-                <p style={{ color: '#0f172a' }} className="text-xs font-black italic leading-snug">
-                  {amountToEnglishWords(total, invoice.currency || 'AED')}
+                <p
+                  style={{ color: '#0f172a' }}
+                  className="amount-in-words-text text-xs sm:text-sm font-black italic leading-snug"
+                >
+                  {amountToEnglishWords(total, invoice.currency || 'AED') || 'Zero UAE Dirhams Only'}
                 </p>
               </div>
             )}
-            {total > 0 && !isAmountInWordsVisible && (
+            {!isAmountInWordsVisible && (
               <div className="no-print pt-1 text-right">
                 <button
                   type="button"

@@ -98,8 +98,8 @@ export const RemindersSettingsSection: React.FC<RemindersSettingsSectionProps> =
     today.setHours(0, 0, 0, 0);
 
     return invoices.filter(inv => {
-      // Must not be paid or cancelled
-      if (inv.status === InvoiceStatus.PAID || inv.status === InvoiceStatus.CANCELLED) {
+      // Must not be paid
+      if (inv.status === InvoiceStatus.PAID) {
         return false;
       }
       if (inv.documentType === 'PROFORMA' || inv.documentType === 'QUOTATION') {

@@ -177,6 +177,7 @@ export const INITIAL_SETTINGS: CompanySettings = {
   invoiceShowRemarks: true,
   invoiceShowAmountInWords: true,
   invoiceShowFooterNote: true,
+  invoiceShowDueDate: true,
   invoiceCompactMode: false,
   statementTemplate: 'standard_audit',
   statementAccentColor: '#0f172a',

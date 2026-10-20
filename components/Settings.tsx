@@ -41,12 +41,15 @@ import {
   AlertTriangle,
   FileCode,
   Smartphone,
-  PenTool
+  PenTool,
+  Bell
 } from 'lucide-react';
 import UserManagementSettings from './UserManagementSettings';
 import SignatureSealSettingsSection from './SignatureSealSettingsSection';
 import AICustomizationPanel from './AICustomizationPanel';
 import DocumentTemplatesSettingsSection from './DocumentTemplatesSettingsSection';
+import { RemindersSettingsSection } from './RemindersSettingsSection';
+import { Invoice, Client } from '../types';
 import { 
   gatherAppBackupPayload, 
   downloadLocalBackupJSON, 
@@ -91,6 +94,8 @@ interface SettingsProps {
   onTriggerTestBlink?: () => void;
   onOpenEmailVerifyModal?: () => void;
   language?: LanguageCode;
+  invoices?: Invoice[];
+  clients?: Client[];
 }
 
 const LOGO_PRESETS = [
@@ -142,9 +147,11 @@ export const Settings: React.FC<SettingsProps> = ({
   onRestoreData,
   onTriggerTestBlink,
   onOpenEmailVerifyModal,
-  language = 'en'
+  language = 'en',
+  invoices = [],
+  clients = []
 }) => {
-  const [activeTab, setActiveTab] = useState<'company' | 'templates' | 'signature' | 'ai' | 'users' | 'backup'>('company');
+  const [activeTab, setActiveTab] = useState<'company' | 'templates' | 'reminders' | 'signature' | 'ai' | 'users' | 'backup'>('company');
   const [formData, setFormData] = useState<CompanySettings>(settings);
   const [isSavedModalOpen, setIsSavedModalOpen] = useState(false);
   const [saveToast, setSaveToast] = useState<{ show: boolean; msg?: string; type?: 'success' | 'error' }>({ show: false });
@@ -855,6 +862,19 @@ export const Settings: React.FC<SettingsProps> = ({
 
         <button
           type="button"
+          onClick={() => setActiveTab('reminders')}
+          className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${
+            activeTab === 'reminders'
+              ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-white/50 dark:hover:bg-slate-700/50'
+          }`}
+        >
+          <Bell size={16} className={activeTab === 'reminders' ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400'} />
+          <span>Overdue Reminders</span>
+        </button>
+
+        <button
+          type="button"
           onClick={() => setActiveTab('signature')}
           className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${
             activeTab === 'signature'
@@ -943,6 +963,48 @@ export const Settings: React.FC<SettingsProps> = ({
             </button>
           </div>
         </form>
+      )}
+
+      {/* ========================================================================= */}
+      {/* TAB: AUTOMATED OVERDUE INVOICE EMAIL REMINDERS                            */}
+      {/* ========================================================================= */}
+      {activeTab === 'reminders' && (
+        <div className="space-y-6 animate-in fade-in">
+          <RemindersSettingsSection
+            formData={formData}
+            onUpdateFields={partial => {
+              setFormData(prev => ({ ...prev, ...partial }));
+            }}
+            invoices={invoices}
+            clients={clients}
+            onSaveSettings={() => handleSave()}
+            onSaveToast={(msg, type) => {
+              setSaveToast({ show: true, msg, type: type || 'success' });
+              setTimeout(() => setSaveToast({ show: false }), 4500);
+            }}
+          />
+          <div className="flex items-center justify-end gap-3">
+            {hasChanges && (
+              <button
+                type="button"
+                onClick={handleReset}
+                className="flex items-center space-x-1.5 px-4 py-3.5 rounded-2xl text-xs font-bold text-slate-600 dark:text-slate-300 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 transition-all"
+              >
+                <RotateCcw size={14} />
+                <span>Discard Changes</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => handleSave()}
+              disabled={isSaving}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3.5 rounded-2xl font-black text-xs shadow-lg flex items-center gap-2 transition-all active:scale-95"
+            >
+              <Save size={16} />
+              <span>{isSaving ? 'Saving Reminder Settings...' : 'Save Reminder Settings'}</span>
+            </button>
+          </div>
+        </div>
       )}
 
       {/* ========================================================================= */}
